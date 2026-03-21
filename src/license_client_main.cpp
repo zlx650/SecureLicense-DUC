@@ -1,0 +1,233 @@
+#include "common.hpp"
+#include "http.hpp"
+
+#include <algorithm>
+#include <iostream>
+#include <sstream>
+#include <string>
+
+namespace {
+
+struct ClientConfig {
+    std::string host = "127.0.0.1";
+    int port = 8088;
+    std::string machine = "demo-machine";
+    std::string cache_path = "./license_cache.txt";
+    std::string secret = "DUC_DEMO_SECRET_CHANGE_ME";
+    int64_t grace_sec = 120;
+    int timeout_ms = 1500;
+};
+
+void print_usage(const char* exe) {
+    std::cout
+        << "Usage:\n"
+        << "  " << exe << " activate [options]\n"
+        << "  " << exe << " run [options]\n\n"
+        << "Options:\n"
+        << "  --host 127.0.0.1\n"
+        << "  --port 8088\n"
+        << "  --machine demo-machine\n"
+        << "  --cache ./license_cache.txt\n"
+        << "  --secret DUC_DEMO_SECRET_CHANGE_ME\n"
+        << "  --grace 120\n"
+        << "  --timeout 1500\n";
+}
+
+bool parse_common_args(int argc, char** argv, int start_idx, ClientConfig* cfg) {
+    for (int i = start_idx; i < argc; ++i) {
+        std::string arg = argv[i];
+        if (arg == "--host" && i + 1 < argc) {
+            cfg->host = argv[++i];
+        } else if (arg == "--port" && i + 1 < argc) {
+            cfg->port = std::stoi(argv[++i]);
+        } else if (arg == "--machine" && i + 1 < argc) {
+            cfg->machine = argv[++i];
+        } else if (arg == "--cache" && i + 1 < argc) {
+            cfg->cache_path = argv[++i];
+        } else if (arg == "--secret" && i + 1 < argc) {
+            cfg->secret = argv[++i];
+        } else if (arg == "--grace" && i + 1 < argc) {
+            cfg->grace_sec = std::stoll(argv[++i]);
+        } else if (arg == "--timeout" && i + 1 < argc) {
+            cfg->timeout_ms = std::stoi(argv[++i]);
+        } else if (arg == "--help") {
+            print_usage(argv[0]);
+            return false;
+        } else {
+            std::cerr << "Unknown arg: " << arg << "\n";
+            print_usage(argv[0]);
+            return false;
+        }
+    }
+    return true;
+}
+
+int cmd_activate(const ClientConfig& cfg) {
+    std::string target = "/activate?machine=" + duc::url_encode(cfg.machine);
+    duc::HttpResponse resp = duc::http_get(cfg.host, cfg.port, target, cfg.timeout_ms);
+    if (!resp.ok()) {
+        std::cerr << "[activate] request failed: " << resp.error << "\n";
+        return 2;
+    }
+    if (resp.status_code != 200) {
+        std::cerr << "[activate] server reject, status=" << resp.status_code
+                  << ", body=" << resp.body << "\n";
+        return 2;
+    }
+
+    std::string token;
+    int64_t server_time = 0;
+    int64_t expires_at = 0;
+    if (!duc::json_get_string(resp.body, "token", &token) ||
+        !duc::json_get_int64(resp.body, "server_time", &server_time) ||
+        !duc::json_get_int64(resp.body, "expires_at", &expires_at)) {
+        std::cerr << "[activate] invalid server response: " << resp.body << "\n";
+        return 2;
+    }
+
+    duc::ClientCache cache;
+    cache.machine = cfg.machine;
+    cache.token = token;
+    cache.last_server_time = server_time;
+    cache.last_heartbeat_time = server_time;
+    cache.last_local_time = duc::now_epoch_sec();
+
+    if (!duc::save_cache(cfg.cache_path, cache)) {
+        std::cerr << "[activate] save cache failed: " << cfg.cache_path << "\n";
+        return 2;
+    }
+
+    std::cout << "[activate] success\n";
+    std::cout << "  machine    : " << cfg.machine << "\n";
+    std::cout << "  expires_at : " << expires_at << "\n";
+    std::cout << "  cache      : " << cfg.cache_path << "\n";
+    return 0;
+}
+
+bool precheck_local(const ClientConfig& cfg,
+                    duc::ClientCache* cache,
+                    duc::TokenPayload* payload,
+                    std::string* reason) {
+    if (cache->machine.empty()) {
+        cache->machine = cfg.machine;
+    }
+
+    if (cache->machine != cfg.machine) {
+        *reason = "cache machine mismatch";
+        return false;
+    }
+
+    std::string err;
+    if (!duc::parse_and_verify_token(cache->token, cfg.secret, payload, &err)) {
+        *reason = "invalid token: " + err;
+        return false;
+    }
+
+    const int64_t now_local = duc::now_epoch_sec();
+    if (cache->last_local_time > 0 && now_local + 2 < cache->last_local_time) {
+        *reason = "local clock rollback detected";
+        return false;
+    }
+
+    const int64_t trusted_now = std::max(now_local, cache->last_server_time);
+    if (trusted_now > payload->exp) {
+        *reason = "license expired";
+        return false;
+    }
+
+    return true;
+}
+
+int cmd_run(const ClientConfig& cfg) {
+    duc::ClientCache cache;
+    if (!duc::load_cache(cfg.cache_path, &cache)) {
+        std::cerr << "[run] no cache found, run activate first: " << cfg.cache_path << "\n";
+        return 3;
+    }
+
+    duc::TokenPayload payload;
+    std::string reason;
+    if (!precheck_local(cfg, &cache, &payload, &reason)) {
+        cache.last_local_time = duc::now_epoch_sec();
+        duc::save_cache(cfg.cache_path, cache);
+        std::cerr << "[run] denied (local precheck): " << reason << "\n";
+        return 3;
+    }
+
+    std::string target = "/heartbeat?machine=" + duc::url_encode(cfg.machine)
+                       + "&token=" + duc::url_encode(cache.token);
+    duc::HttpResponse resp = duc::http_get(cfg.host, cfg.port, target, cfg.timeout_ms);
+
+    if (resp.ok() && resp.status_code == 200) {
+        int64_t server_time = 0;
+        if (!duc::json_get_int64(resp.body, "server_time", &server_time)) {
+            std::cerr << "[run] denied: heartbeat response parse failed\n";
+            return 3;
+        }
+
+        if (cache.last_server_time > 0 && server_time + 2 < cache.last_server_time) {
+            std::cerr << "[run] denied: server time rollback detected\n";
+            return 3;
+        }
+
+        cache.last_server_time = server_time;
+        cache.last_heartbeat_time = server_time;
+        cache.last_local_time = duc::now_epoch_sec();
+        if (!duc::save_cache(cfg.cache_path, cache)) {
+            std::cerr << "[run] warning: cache save failed\n";
+        }
+
+        std::cout << "[run] allowed (online heartbeat ok)\n";
+        return 0;
+    }
+
+    const int64_t now = duc::now_epoch_sec();
+    const int64_t offline_for = (cache.last_heartbeat_time > 0) ? (now - cache.last_heartbeat_time) : (1LL << 60);
+
+    if (offline_for <= cfg.grace_sec) {
+        cache.last_local_time = now;
+        duc::save_cache(cfg.cache_path, cache);
+
+        std::cout << "[run] allowed (offline grace mode)\n";
+        std::cout << "  offline_for: " << offline_for << " sec\n";
+        std::cout << "  grace_sec  : " << cfg.grace_sec << " sec\n";
+        return 0;
+    }
+
+    cache.last_local_time = now;
+    duc::save_cache(cfg.cache_path, cache);
+    std::cerr << "[run] denied: heartbeat failed and grace exceeded\n";
+    if (!resp.error.empty()) {
+        std::cerr << "  network_error: " << resp.error << "\n";
+    } else {
+        std::cerr << "  server_status: " << resp.status_code << ", body=" << resp.body << "\n";
+    }
+    return 3;
+}
+
+}  // namespace
+
+int main(int argc, char** argv) {
+    if (argc < 2) {
+        print_usage(argv[0]);
+        return 1;
+    }
+
+    const std::string command = argv[1];
+
+    ClientConfig cfg;
+    if (!parse_common_args(argc, argv, 2, &cfg)) {
+        return 1;
+    }
+
+    if (command == "activate") {
+        return cmd_activate(cfg);
+    }
+    if (command == "run") {
+        return cmd_run(cfg);
+    }
+
+    std::cerr << "Unknown command: " << command << "\n";
+    print_usage(argv[0]);
+    return 1;
+}
