@@ -11,11 +11,11 @@ SERVER_LOG="/tmp/duc_server_demo.log"
 mkdir -p "$BUILD_DIR"
 
 g++ -std=c++17 -O2 -I"$ROOT_DIR/include" \
-  "$ROOT_DIR/src/common.cpp" "$ROOT_DIR/src/http.cpp" "$ROOT_DIR/src/license_server_main.cpp" \
+  "$ROOT_DIR/src/common.cpp" "$ROOT_DIR/src/http.cpp" "$ROOT_DIR/src/log.cpp" "$ROOT_DIR/src/license_server_main.cpp" \
   -o "$BUILD_DIR/license_server"
 
 g++ -std=c++17 -O2 -I"$ROOT_DIR/include" \
-  "$ROOT_DIR/src/common.cpp" "$ROOT_DIR/src/http.cpp" "$ROOT_DIR/src/license_client_main.cpp" \
+  "$ROOT_DIR/src/common.cpp" "$ROOT_DIR/src/http.cpp" "$ROOT_DIR/src/log.cpp" "$ROOT_DIR/src/license_client_main.cpp" \
   -o "$BUILD_DIR/license_client"
 
 rm -f "$CACHE_FILE" "$SERVER_LOG"

@@ -8,6 +8,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 add_library(duccore
     src/common.cpp
     src/http.cpp
+    src/log.cpp
 )
 
 target_include_directories(duccore PUBLIC include)
@@ -17,3 +18,9 @@ target_link_libraries(license_server PRIVATE duccore)
 
 add_executable(license_client src/license_client_main.cpp)
 target_link_libraries(license_client PRIVATE duccore)
+
+add_executable(duccore_tests tests/test_duccore.cpp)
+target_link_libraries(duccore_tests PRIVATE duccore)
+
+enable_testing()
+add_test(NAME duccore_tests COMMAND duccore_tests)

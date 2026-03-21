@@ -1,5 +1,6 @@
 #include "common.hpp"
 #include "http.hpp"
+#include "log.hpp"
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -38,7 +39,7 @@ bool parse_args(int argc, char** argv, ServerConfig* cfg) {
             print_usage(argv[0]);
             return false;
         } else {
-            std::cerr << "Unknown arg: " << arg << "\n";
+            duc::logging::error("server", "-", "unknown arg", {{"arg", arg}});
             print_usage(argv[0]);
             return false;
         }
@@ -88,6 +89,7 @@ std::string read_http_request(int fd) {
 
 std::pair<int, std::string> handle_route(
     const std::string& target,
+    const std::string& request_id,
     const ServerConfig& cfg,
     std::unordered_map<std::string, int64_t>* machine_exp) {
 
@@ -104,6 +106,7 @@ std::pair<int, std::string> handle_route(
     if (path == "/activate") {
         auto it = query.find("machine");
         if (it == query.end() || it->second.empty()) {
+            duc::logging::warn("server", request_id, "activate missing machine");
             return {400, "{\"status\":\"error\",\"message\":\"missing machine\"}"};
         }
 
@@ -118,6 +121,8 @@ std::pair<int, std::string> handle_route(
 
         const std::string token = duc::make_token(payload, cfg.secret);
         (*machine_exp)[machine] = exp;
+        duc::logging::info("server", request_id, "license activated",
+                           {{"machine", machine}, {"expires_at", std::to_string(exp)}});
 
         std::ostringstream oss;
         oss << "{"
@@ -134,6 +139,7 @@ std::pair<int, std::string> handle_route(
         auto it_machine = query.find("machine");
         auto it_token = query.find("token");
         if (it_machine == query.end() || it_token == query.end()) {
+            duc::logging::warn("server", request_id, "heartbeat missing machine/token");
             return {400, "{\"status\":\"error\",\"message\":\"missing machine/token\"}"};
         }
 
@@ -143,21 +149,28 @@ std::pair<int, std::string> handle_route(
         duc::TokenPayload payload;
         std::string err;
         if (!duc::parse_and_verify_token(token, cfg.secret, &payload, &err)) {
+            duc::logging::warn("server", request_id, "heartbeat invalid token", {{"reason", err}});
             std::ostringstream oss;
             oss << "{\"status\":\"error\",\"message\":\"invalid token: " << json_escape(err) << "\"}";
             return {401, oss.str()};
         }
 
         if (payload.machine != machine) {
+            duc::logging::warn("server", request_id, "token-machine mismatch",
+                               {{"machine", machine}, {"token_machine", payload.machine}});
             return {401, "{\"status\":\"error\",\"message\":\"token-machine mismatch\"}"};
         }
 
         if (now > payload.exp) {
+            duc::logging::warn("server", request_id, "license expired",
+                               {{"machine", machine}, {"exp", std::to_string(payload.exp)}});
             return {403, "{\"status\":\"error\",\"message\":\"license expired\"}"};
         }
 
         auto found = machine_exp->find(machine);
         if (found != machine_exp->end() && now > found->second) {
+            duc::logging::warn("server", request_id, "server policy expired",
+                               {{"machine", machine}, {"exp", std::to_string(found->second)}});
             return {403, "{\"status\":\"error\",\"message\":\"server policy expired\"}"};
         }
 
@@ -167,15 +180,19 @@ std::pair<int, std::string> handle_route(
             << "\"server_time\":" << now << "," 
             << "\"expires_at\":" << payload.exp
             << "}";
+        duc::logging::debug("server", request_id, "heartbeat ok", {{"machine", machine}});
         return {200, oss.str()};
     }
 
+    duc::logging::warn("server", request_id, "route not found", {{"target", target}});
     return {404, "{\"status\":\"error\",\"message\":\"not found\"}"};
 }
 
 }  // namespace
 
 int main(int argc, char** argv) {
+    duc::logging::set_min_level(duc::logging::Level::Info);
+
     ServerConfig cfg;
     if (!parse_args(argc, argv, &cfg)) {
         return 1;
@@ -183,7 +200,7 @@ int main(int argc, char** argv) {
 
     int listen_fd = ::socket(AF_INET, SOCK_STREAM, 0);
     if (listen_fd < 0) {
-        std::cerr << "socket failed: " << std::strerror(errno) << "\n";
+        duc::logging::error("server", "-", "socket failed", {{"errno", std::strerror(errno)}});
         return 1;
     }
 
@@ -196,19 +213,20 @@ int main(int argc, char** argv) {
     addr.sin_port = htons(static_cast<uint16_t>(cfg.port));
 
     if (::bind(listen_fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0) {
-        std::cerr << "bind failed: " << std::strerror(errno) << "\n";
+        duc::logging::error("server", "-", "bind failed", {{"errno", std::strerror(errno)}});
         ::close(listen_fd);
         return 1;
     }
 
     if (::listen(listen_fd, 32) != 0) {
-        std::cerr << "listen failed: " << std::strerror(errno) << "\n";
+        duc::logging::error("server", "-", "listen failed", {{"errno", std::strerror(errno)}});
         ::close(listen_fd);
         return 1;
     }
 
-    std::cout << "[server] listening on 0.0.0.0:" << cfg.port
-              << ", license duration=" << cfg.duration_sec << " sec\n";
+    duc::logging::info("server", "-", "server started",
+                       {{"listen", "0.0.0.0:" + std::to_string(cfg.port)},
+                        {"license_duration_sec", std::to_string(cfg.duration_sec)}});
 
     std::unordered_map<std::string, int64_t> machine_exp;
 
@@ -217,10 +235,11 @@ int main(int argc, char** argv) {
         socklen_t peer_len = sizeof(peer);
         int conn_fd = ::accept(listen_fd, reinterpret_cast<sockaddr*>(&peer), &peer_len);
         if (conn_fd < 0) {
-            std::cerr << "accept failed: " << std::strerror(errno) << "\n";
+            duc::logging::error("server", "-", "accept failed", {{"errno", std::strerror(errno)}});
             continue;
         }
 
+        const std::string request_id = duc::logging::generate_request_id();
         std::string req = read_http_request(conn_fd);
         size_t line_end = req.find("\r\n");
         std::string first_line = (line_end == std::string::npos) ? req : req.substr(0, line_end);
@@ -230,21 +249,27 @@ int main(int argc, char** argv) {
         std::string body = "{\"status\":\"error\",\"message\":\"bad request\"}";
 
         if (!first_line.empty() && duc::parse_request_line(first_line, &method, &target)) {
+            duc::logging::info("server", request_id, "request received",
+                               {{"method", method}, {"target", target}});
             if (method != "GET") {
                 status = 405;
                 body = "{\"status\":\"error\",\"message\":\"only GET allowed\"}";
+                duc::logging::warn("server", request_id, "method not allowed", {{"method", method}});
             } else {
-                auto result = handle_route(target, cfg, &machine_exp);
+                auto result = handle_route(target, request_id, cfg, &machine_exp);
                 status = result.first;
                 body = result.second;
             }
+        } else {
+            duc::logging::warn("server", request_id, "invalid request line", {{"line", first_line}});
         }
 
         const std::string resp = duc::make_json_response(status, body);
         (void)::send(conn_fd, resp.data(), resp.size(), 0);
         ::close(conn_fd);
 
-        std::cout << "[server] " << method << " " << target << " -> " << status << "\n";
+        duc::logging::info("server", request_id, "request completed",
+                           {{"status", std::to_string(status)}, {"method", method}, {"target", target}});
     }
 
     ::close(listen_fd);

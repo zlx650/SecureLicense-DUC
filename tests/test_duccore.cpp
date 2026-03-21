@@ -1,0 +1,179 @@
+#include "common.hpp"
+#include "http.hpp"
+
+#include <cstdio>
+#include <iostream>
+#include <string>
+#include <vector>
+
+namespace {
+
+using TestFn = bool (*)();
+
+struct TestCase {
+    const char* name;
+    TestFn fn;
+};
+
+#define EXPECT_TRUE(cond)                                                                 \
+    do {                                                                                  \
+        if (!(cond)) {                                                                    \
+            std::cerr << "  assertion failed: " #cond << " (line " << __LINE__ << ")\n"; \
+            return false;                                                                 \
+        }                                                                                 \
+    } while (0)
+
+#define EXPECT_EQ(a, b)                                                                   \
+    do {                                                                                  \
+        if (!((a) == (b))) {                                                              \
+            std::cerr << "  assertion failed: " #a " == " #b << " (line " << __LINE__ << ")\n"; \
+            return false;                                                                 \
+        }                                                                                 \
+    } while (0)
+
+bool test_token_roundtrip() {
+    duc::TokenPayload in;
+    in.machine = "node-A";
+    in.iat = 100;
+    in.exp = 200;
+    in.jti = "abc123";
+
+    const std::string secret = "secret-key";
+    const std::string token = duc::make_token(in, secret);
+
+    duc::TokenPayload out;
+    std::string err;
+    EXPECT_TRUE(duc::parse_and_verify_token(token, secret, &out, &err));
+    EXPECT_EQ(out.machine, in.machine);
+    EXPECT_EQ(out.iat, in.iat);
+    EXPECT_EQ(out.exp, in.exp);
+    EXPECT_EQ(out.jti, in.jti);
+    return true;
+}
+
+bool test_token_tampered() {
+    duc::TokenPayload in;
+    in.machine = "node-B";
+    in.iat = 100;
+    in.exp = 300;
+    in.jti = "xyz";
+
+    const std::string secret = "secret-key";
+    std::string token = duc::make_token(in, secret);
+    token.back() = (token.back() == 'a') ? 'b' : 'a';
+
+    duc::TokenPayload out;
+    std::string err;
+    EXPECT_TRUE(!duc::parse_and_verify_token(token, secret, &out, &err));
+    return true;
+}
+
+bool test_wrong_secret() {
+    duc::TokenPayload in;
+    in.machine = "node-C";
+    in.iat = 1;
+    in.exp = 2;
+    in.jti = "j1";
+
+    const std::string token = duc::make_token(in, "secret-1");
+
+    duc::TokenPayload out;
+    std::string err;
+    EXPECT_TRUE(!duc::parse_and_verify_token(token, "secret-2", &out, &err));
+    return true;
+}
+
+bool test_query_parse() {
+    const auto q = duc::parse_query_from_target("/heartbeat?machine=node-1&token=a%2Bb%3D%3D");
+    EXPECT_TRUE(q.count("machine") == 1);
+    EXPECT_TRUE(q.count("token") == 1);
+    EXPECT_EQ(q.at("machine"), "node-1");
+    EXPECT_EQ(q.at("token"), "a+b==");
+    return true;
+}
+
+bool test_json_parse() {
+    const std::string json = "{\"status\":\"ok\",\"server_time\":123,\"token\":\"abc\"}";
+    std::string token;
+    int64_t st = 0;
+    EXPECT_TRUE(duc::json_get_string(json, "token", &token));
+    EXPECT_TRUE(duc::json_get_int64(json, "server_time", &st));
+    EXPECT_EQ(token, "abc");
+    EXPECT_EQ(st, 123);
+    return true;
+}
+
+bool test_request_line_parse() {
+    std::string method;
+    std::string target;
+    EXPECT_TRUE(duc::parse_request_line("GET /activate?machine=a HTTP/1.1", &method, &target));
+    EXPECT_EQ(method, "GET");
+    EXPECT_EQ(target, "/activate?machine=a");
+    return true;
+}
+
+bool test_cache_roundtrip() {
+    const std::string path = "/tmp/duc_test_cache_roundtrip.txt";
+
+    duc::ClientCache in;
+    in.machine = "m1";
+    in.token = "token";
+    in.last_server_time = 11;
+    in.last_heartbeat_time = 22;
+    in.last_local_time = 33;
+
+    EXPECT_TRUE(duc::save_cache(path, in));
+
+    duc::ClientCache out;
+    EXPECT_TRUE(duc::load_cache(path, &out));
+    EXPECT_EQ(out.machine, in.machine);
+    EXPECT_EQ(out.token, in.token);
+    EXPECT_EQ(out.last_server_time, in.last_server_time);
+    EXPECT_EQ(out.last_heartbeat_time, in.last_heartbeat_time);
+    EXPECT_EQ(out.last_local_time, in.last_local_time);
+
+    std::remove(path.c_str());
+    return true;
+}
+
+bool test_sign_is_deterministic() {
+    const std::string s1 = duc::sign_payload("abc", "k1");
+    const std::string s2 = duc::sign_payload("abc", "k1");
+    const std::string s3 = duc::sign_payload("abc", "k2");
+    EXPECT_EQ(s1, s2);
+    EXPECT_TRUE(s1 != s3);
+    EXPECT_TRUE(s1.size() == 64);
+    return true;
+}
+
+}  // namespace
+
+int main() {
+    const std::vector<TestCase> cases = {
+        {"token_roundtrip", test_token_roundtrip},
+        {"token_tampered", test_token_tampered},
+        {"wrong_secret", test_wrong_secret},
+        {"query_parse", test_query_parse},
+        {"json_parse", test_json_parse},
+        {"request_line_parse", test_request_line_parse},
+        {"cache_roundtrip", test_cache_roundtrip},
+        {"sign_is_deterministic", test_sign_is_deterministic},
+    };
+
+    int pass = 0;
+    int fail = 0;
+
+    for (const auto& t : cases) {
+        const bool ok = t.fn();
+        if (ok) {
+            ++pass;
+            std::cout << "[PASS] " << t.name << "\n";
+        } else {
+            ++fail;
+            std::cout << "[FAIL] " << t.name << "\n";
+        }
+    }
+
+    std::cout << "[SUMMARY] pass=" << pass << " fail=" << fail << "\n";
+    return (fail == 0) ? 0 : 1;
+}
