@@ -1,5 +1,7 @@
+#include "config.hpp"
 #include "common.hpp"
 #include "http.hpp"
+#include "log.hpp"
 
 #include <algorithm>
 #include <iostream>
@@ -16,6 +18,8 @@ struct ClientConfig {
     std::string secret = "DUC_DEMO_SECRET_CHANGE_ME";
     int64_t grace_sec = 120;
     int timeout_ms = 1500;
+    std::string log_level = "INFO";
+    std::string config_path = "./config/client.conf";
 };
 
 void print_usage(const char* exe) {
@@ -24,19 +28,80 @@ void print_usage(const char* exe) {
         << "  " << exe << " activate [options]\n"
         << "  " << exe << " run [options]\n\n"
         << "Options:\n"
+        << "  --config ./config/client.conf\n"
         << "  --host 127.0.0.1\n"
         << "  --port 8088\n"
         << "  --machine demo-machine\n"
         << "  --cache ./license_cache.txt\n"
         << "  --secret DUC_DEMO_SECRET_CHANGE_ME\n"
         << "  --grace 120\n"
-        << "  --timeout 1500\n";
+        << "  --timeout 1500\n"
+        << "  --log-level INFO\n";
+}
+
+bool apply_config_file(const std::string& path, bool required, ClientConfig* cfg) {
+    if (!required && !duc::config::file_exists(path)) {
+        return true;
+    }
+
+    duc::config::KV kv;
+    std::string err;
+    if (!duc::config::load_kv_file(path, &kv, &err)) {
+        std::cerr << "load config failed: " << err << "\n";
+        return false;
+    }
+
+    if (!duc::config::get_int(kv, "client.port", &cfg->port, &err)) {
+        std::cerr << "invalid config client.port: " << err << "\n";
+        return false;
+    }
+    if (!duc::config::get_int64(kv, "client.grace_sec", &cfg->grace_sec, &err)) {
+        std::cerr << "invalid config client.grace_sec: " << err << "\n";
+        return false;
+    }
+    if (!duc::config::get_int(kv, "client.timeout_ms", &cfg->timeout_ms, &err)) {
+        std::cerr << "invalid config client.timeout_ms: " << err << "\n";
+        return false;
+    }
+
+    std::string value;
+    if (duc::config::get_string(kv, "client.host", &value)) cfg->host = value;
+    if (duc::config::get_string(kv, "client.machine", &value)) cfg->machine = value;
+    if (duc::config::get_string(kv, "client.cache_path", &value)) cfg->cache_path = value;
+    if (duc::config::get_string(kv, "client.secret", &value)) cfg->secret = value;
+    if (duc::config::get_string(kv, "client.log_level", &value)) cfg->log_level = value;
+    return true;
 }
 
 bool parse_common_args(int argc, char** argv, int start_idx, ClientConfig* cfg) {
+    bool explicit_config = false;
+
     for (int i = start_idx; i < argc; ++i) {
         std::string arg = argv[i];
-        if (arg == "--host" && i + 1 < argc) {
+        if (arg == "--config" && i + 1 < argc) {
+            cfg->config_path = argv[++i];
+            explicit_config = true;
+        } else if (arg == "--config") {
+            std::cerr << "missing value for --config\n";
+            return false;
+        } else if (arg == "--help") {
+            print_usage(argv[0]);
+            return false;
+        }
+    }
+
+    if (!apply_config_file(cfg->config_path, explicit_config, cfg)) {
+        return false;
+    }
+
+    for (int i = start_idx; i < argc; ++i) {
+        std::string arg = argv[i];
+        if (arg == "--config" && i + 1 < argc) {
+            ++i;
+        } else if (arg == "--config") {
+            std::cerr << "missing value for --config\n";
+            return false;
+        } else if (arg == "--host" && i + 1 < argc) {
             cfg->host = argv[++i];
         } else if (arg == "--port" && i + 1 < argc) {
             cfg->port = std::stoi(argv[++i]);
@@ -50,6 +115,8 @@ bool parse_common_args(int argc, char** argv, int start_idx, ClientConfig* cfg) 
             cfg->grace_sec = std::stoll(argv[++i]);
         } else if (arg == "--timeout" && i + 1 < argc) {
             cfg->timeout_ms = std::stoi(argv[++i]);
+        } else if (arg == "--log-level" && i + 1 < argc) {
+            cfg->log_level = argv[++i];
         } else if (arg == "--help") {
             print_usage(argv[0]);
             return false;
@@ -219,6 +286,13 @@ int main(int argc, char** argv) {
     if (!parse_common_args(argc, argv, 2, &cfg)) {
         return 1;
     }
+
+    duc::logging::Level level = duc::logging::Level::Info;
+    if (!duc::logging::parse_level(cfg.log_level, &level)) {
+        std::cerr << "invalid log level: " << cfg.log_level << "\n";
+        return 1;
+    }
+    duc::logging::set_min_level(level);
 
     if (command == "activate") {
         return cmd_activate(cfg);

@@ -2,3 +2,4 @@ build/
 license_cache.txt
 *.log
 test_artifacts/
+*.db

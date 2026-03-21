@@ -1,6 +1,8 @@
+#include "config.hpp"
 #include "common.hpp"
 #include "http.hpp"
 #include "log.hpp"
+#include "storage.hpp"
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -12,7 +14,6 @@
 #include <iostream>
 #include <sstream>
 #include <string>
-#include <unordered_map>
 
 namespace {
 
@@ -20,21 +21,82 @@ struct ServerConfig {
     int port = 8088;
     std::string secret = "DUC_DEMO_SECRET_CHANGE_ME";
     int64_t duration_sec = 3600;
+    std::string db_path = "./license_store.db";
+    std::string log_level = "INFO";
+    std::string config_path = "./config/server.conf";
 };
 
 void print_usage(const char* exe) {
-    std::cout << "Usage: " << exe << " [--port 8088] [--duration 3600] [--secret xxx]\n";
+    std::cout << "Usage: " << exe
+              << " [--config ./config/server.conf] [--port 8088] [--duration 3600] "
+                 "[--secret xxx] [--db ./license_store.db] [--log-level INFO]\n";
+}
+
+bool apply_config_file(const std::string& path, bool required, ServerConfig* cfg) {
+    if (!required && !duc::config::file_exists(path)) {
+        return true;
+    }
+
+    duc::config::KV kv;
+    std::string err;
+    if (!duc::config::load_kv_file(path, &kv, &err)) {
+        duc::logging::error("server", "-", "load config failed", {{"path", path}, {"error", err}});
+        return false;
+    }
+
+    if (!duc::config::get_int(kv, "server.port", &cfg->port, &err)) {
+        duc::logging::error("server", "-", "invalid config", {{"key", "server.port"}, {"error", err}});
+        return false;
+    }
+    if (!duc::config::get_int64(kv, "server.duration_sec", &cfg->duration_sec, &err)) {
+        duc::logging::error("server", "-", "invalid config", {{"key", "server.duration_sec"}, {"error", err}});
+        return false;
+    }
+    std::string value;
+    if (duc::config::get_string(kv, "server.secret", &value)) cfg->secret = value;
+    if (duc::config::get_string(kv, "server.db_path", &value)) cfg->db_path = value;
+    if (duc::config::get_string(kv, "server.log_level", &value)) cfg->log_level = value;
+    return true;
 }
 
 bool parse_args(int argc, char** argv, ServerConfig* cfg) {
+    bool explicit_config = false;
+
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
-        if (arg == "--port" && i + 1 < argc) {
+        if (arg == "--config" && i + 1 < argc) {
+            cfg->config_path = argv[++i];
+            explicit_config = true;
+        } else if (arg == "--config") {
+            duc::logging::error("server", "-", "missing value for --config");
+            return false;
+        } else if (arg == "--help") {
+            print_usage(argv[0]);
+            return false;
+        }
+    }
+
+    if (!apply_config_file(cfg->config_path, explicit_config, cfg)) {
+        return false;
+    }
+
+    for (int i = 1; i < argc; ++i) {
+        std::string arg = argv[i];
+        if (arg == "--config" && i + 1 < argc) {
+            ++i;
+        } else if (arg == "--config") {
+            duc::logging::error("server", "-", "missing value for --config");
+            return false;
+        } else if (arg == "--port" && i + 1 < argc) {
             cfg->port = std::stoi(argv[++i]);
         } else if (arg == "--duration" && i + 1 < argc) {
             cfg->duration_sec = std::stoll(argv[++i]);
         } else if (arg == "--secret" && i + 1 < argc) {
             cfg->secret = argv[++i];
+        } else if (arg == "--db" && i + 1 < argc) {
+            cfg->db_path = argv[++i];
+        } else if (arg == "--log-level" && i + 1 < argc) {
+            cfg->log_level = argv[++i];
         } else if (arg == "--help") {
             print_usage(argv[0]);
             return false;
@@ -91,7 +153,7 @@ std::pair<int, std::string> handle_route(
     const std::string& target,
     const std::string& request_id,
     const ServerConfig& cfg,
-    std::unordered_map<std::string, int64_t>* machine_exp) {
+    duc::LicenseStore* store) {
 
     const int64_t now = duc::now_epoch_sec();
     const std::string path = path_only(target);
@@ -120,7 +182,12 @@ std::pair<int, std::string> handle_route(
         payload.jti = duc::random_jti();
 
         const std::string token = duc::make_token(payload, cfg.secret);
-        (*machine_exp)[machine] = exp;
+        std::string db_err;
+        if (!store->upsert_license(machine, exp, now, &db_err)) {
+            duc::logging::error("server", request_id, "db upsert failed", {{"error", db_err}});
+            return {500, "{\"status\":\"error\",\"message\":\"internal db error\"}"};
+        }
+
         duc::logging::info("server", request_id, "license activated",
                            {{"machine", machine}, {"expires_at", std::to_string(exp)}});
 
@@ -167,10 +234,21 @@ std::pair<int, std::string> handle_route(
             return {403, "{\"status\":\"error\",\"message\":\"license expired\"}"};
         }
 
-        auto found = machine_exp->find(machine);
-        if (found != machine_exp->end() && now > found->second) {
+        int64_t db_exp = 0;
+        bool found = false;
+        std::string db_err;
+        if (!store->get_license_expiry(machine, &db_exp, &found, &db_err)) {
+            duc::logging::error("server", request_id, "db query failed", {{"error", db_err}});
+            return {500, "{\"status\":\"error\",\"message\":\"internal db error\"}"};
+        }
+        if (!found) {
+            duc::logging::warn("server", request_id, "license not found in db", {{"machine", machine}});
+            return {403, "{\"status\":\"error\",\"message\":\"license not found\"}"};
+        }
+
+        if (now > db_exp) {
             duc::logging::warn("server", request_id, "server policy expired",
-                               {{"machine", machine}, {"exp", std::to_string(found->second)}});
+                               {{"machine", machine}, {"exp", std::to_string(db_exp)}});
             return {403, "{\"status\":\"error\",\"message\":\"server policy expired\"}"};
         }
 
@@ -191,10 +269,23 @@ std::pair<int, std::string> handle_route(
 }  // namespace
 
 int main(int argc, char** argv) {
-    duc::logging::set_min_level(duc::logging::Level::Info);
-
     ServerConfig cfg;
     if (!parse_args(argc, argv, &cfg)) {
+        return 1;
+    }
+
+    duc::logging::Level level = duc::logging::Level::Info;
+    if (!duc::logging::parse_level(cfg.log_level, &level)) {
+        duc::logging::error("server", "-", "invalid log level", {{"log_level", cfg.log_level}});
+        return 1;
+    }
+    duc::logging::set_min_level(level);
+
+    duc::LicenseStore store;
+    std::string db_err;
+    if (!store.open(cfg.db_path, &db_err)) {
+        duc::logging::error("server", "-", "db open failed",
+                            {{"db_path", cfg.db_path}, {"error", db_err}});
         return 1;
     }
 
@@ -226,9 +317,8 @@ int main(int argc, char** argv) {
 
     duc::logging::info("server", "-", "server started",
                        {{"listen", "0.0.0.0:" + std::to_string(cfg.port)},
-                        {"license_duration_sec", std::to_string(cfg.duration_sec)}});
-
-    std::unordered_map<std::string, int64_t> machine_exp;
+                        {"license_duration_sec", std::to_string(cfg.duration_sec)},
+                        {"db_path", cfg.db_path}});
 
     while (true) {
         sockaddr_in peer{};
@@ -256,7 +346,7 @@ int main(int argc, char** argv) {
                 body = "{\"status\":\"error\",\"message\":\"only GET allowed\"}";
                 duc::logging::warn("server", request_id, "method not allowed", {{"method", method}});
             } else {
-                auto result = handle_route(target, request_id, cfg, &machine_exp);
+                auto result = handle_route(target, request_id, cfg, &store);
                 status = result.first;
                 body = result.second;
             }

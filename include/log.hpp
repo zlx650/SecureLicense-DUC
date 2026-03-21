@@ -16,6 +16,8 @@ enum class Level {
 using Fields = std::vector<std::pair<std::string, std::string>>;
 
 void set_min_level(Level level);
+bool parse_level(const std::string& text, Level* out);
+std::string level_to_string(Level level);
 std::string generate_request_id();
 
 void write(Level level,

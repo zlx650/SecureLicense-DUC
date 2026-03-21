@@ -7,19 +7,30 @@ PORT="${1:-8091}"
 MACHINE="demo-machine"
 CACHE_FILE="$ROOT_DIR/license_cache.txt"
 SERVER_LOG="/tmp/duc_server_demo.log"
+DB_FILE="/tmp/duc_server_demo.db"
+
+SQLITE_CFLAGS=""
+SQLITE_LDFLAGS="-lsqlite3"
+
+if [[ -n "${CONDA_PREFIX:-}" ]] && [[ -f "${CONDA_PREFIX}/include/sqlite3.h" ]]; then
+  SQLITE_CFLAGS="-I${CONDA_PREFIX}/include"
+  SQLITE_LDFLAGS="-L${CONDA_PREFIX}/lib -lsqlite3"
+  export LD_LIBRARY_PATH="${CONDA_PREFIX}/lib:${LD_LIBRARY_PATH:-}"
+fi
 
 mkdir -p "$BUILD_DIR"
 
 g++ -std=c++17 -O2 -I"$ROOT_DIR/include" \
-  "$ROOT_DIR/src/common.cpp" "$ROOT_DIR/src/http.cpp" "$ROOT_DIR/src/log.cpp" "$ROOT_DIR/src/license_server_main.cpp" \
-  -o "$BUILD_DIR/license_server"
+  $SQLITE_CFLAGS \
+  "$ROOT_DIR/src/config.cpp" "$ROOT_DIR/src/common.cpp" "$ROOT_DIR/src/http.cpp" "$ROOT_DIR/src/log.cpp" "$ROOT_DIR/src/storage.cpp" "$ROOT_DIR/src/license_server_main.cpp" \
+  $SQLITE_LDFLAGS -o "$BUILD_DIR/license_server"
 
 g++ -std=c++17 -O2 -I"$ROOT_DIR/include" \
-  "$ROOT_DIR/src/common.cpp" "$ROOT_DIR/src/http.cpp" "$ROOT_DIR/src/log.cpp" "$ROOT_DIR/src/license_client_main.cpp" \
+  "$ROOT_DIR/src/config.cpp" "$ROOT_DIR/src/common.cpp" "$ROOT_DIR/src/http.cpp" "$ROOT_DIR/src/log.cpp" "$ROOT_DIR/src/license_client_main.cpp" \
   -o "$BUILD_DIR/license_client"
 
-rm -f "$CACHE_FILE" "$SERVER_LOG"
-"$BUILD_DIR/license_server" --port "$PORT" --duration 40 > "$SERVER_LOG" 2>&1 &
+rm -f "$CACHE_FILE" "$SERVER_LOG" "$DB_FILE"
+"$BUILD_DIR/license_server" --port "$PORT" --duration 40 --db "$DB_FILE" > "$SERVER_LOG" 2>&1 &
 SERVER_PID=$!
 trap 'kill "$SERVER_PID" >/dev/null 2>&1 || true' EXIT
 

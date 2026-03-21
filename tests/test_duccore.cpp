@@ -1,5 +1,6 @@
 #include "common.hpp"
 #include "http.hpp"
+#include "storage.hpp"
 
 #include <cstdio>
 #include <iostream>
@@ -146,6 +147,26 @@ bool test_sign_is_deterministic() {
     return true;
 }
 
+bool test_sqlite_store_roundtrip() {
+    const std::string path = "/tmp/duc_test_store_roundtrip.db";
+    std::remove(path.c_str());
+
+    duc::LicenseStore store;
+    std::string err;
+    EXPECT_TRUE(store.open(path, &err));
+    EXPECT_TRUE(store.upsert_license("node-1", 12345, 12300, &err));
+
+    bool found = false;
+    int64_t exp = 0;
+    EXPECT_TRUE(store.get_license_expiry("node-1", &exp, &found, &err));
+    EXPECT_TRUE(found);
+    EXPECT_EQ(exp, 12345);
+
+    store.close();
+    std::remove(path.c_str());
+    return true;
+}
+
 }  // namespace
 
 int main() {
@@ -158,6 +179,7 @@ int main() {
         {"request_line_parse", test_request_line_parse},
         {"cache_roundtrip", test_cache_roundtrip},
         {"sign_is_deterministic", test_sign_is_deterministic},
+        {"sqlite_store_roundtrip", test_sqlite_store_roundtrip},
     };
 
     int pass = 0;

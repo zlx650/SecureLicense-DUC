@@ -24,6 +24,9 @@ Track repeatable test evidence for each major update, including command, expecte
 | TC06 | Run with tampered token | Denied |
 | TC07 | Run with machine mismatch | Denied |
 | TC08 | Run with wrong secret | Denied |
+| TC09 | Persistence after server restart | Allowed (online heartbeat ok) |
+| TC10 | Config file only execution | Activation and run succeed |
+| TC11 | CLI overrides config values | Override takes effect |
 
 ## 4. How To Execute
 
@@ -54,21 +57,21 @@ Notes: <root cause / follow-up>
 ## 6. Current Baseline Result
 
 - Date: 2026-03-21
-- Version: v1.0.0 baseline
-- Executor: local
+- Version: v1.2.1
+- Executor: local (`conda env: cproject`)
 - Command: `./scripts/test_regression.sh`
 - Status: PASS
-- Summary: PASS=12, FAIL=0
+- Summary: PASS=18, FAIL=0
 - Report: `test_artifacts/latest_test_report.txt`
 
 ## 7. Iteration History
 
 ```text
 Date: 2026-03-21
-Version: v1.0.0 baseline
+Version: v1.2.1
 Executor: local
 Command: ./scripts/test_regression.sh
 Result: PASS
 Failed Cases: none
-Notes: established baseline with HMAC-SHA256, structured logging, and unit-test gate.
+Notes: validated config-file execution and CLI override precedence (TC10/TC11), total PASS=18.
 ```

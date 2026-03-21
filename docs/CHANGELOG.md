@@ -5,8 +5,45 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
-- Version, test, and optimization tracking documents.
-- Automated regression test script for core license flows.
+- No pending entries.
+
+### Changed
+- No pending entries.
+
+## [v1.2.1] - 2026-03-21
+
+### Added
+- Config file module (`config.hpp` / `config.cpp`) with key-value parser.
+- Default configuration files:
+  - `config/server.conf`
+  - `config/client.conf`
+- Support for `--config` and `--log-level` in server and client.
+- Regression cases:
+  - `TC10.1/TC10.2`: config-file-only activation/run.
+  - `TC11.1/TC11.2`: command-line override over config values.
+
+### Changed
+- Runtime config source changed to: `default values < config file < command line`.
+- Build scripts (`run_demo.sh`, `scripts/test_regression.sh`) now compile with `src/config.cpp`.
+- Regression summary baseline expanded to PASS=18 with config and override coverage.
+
+## [v1.2.0] - 2026-03-21
+
+### Added
+- SQLite license persistence module (`LicenseStore`) with schema initialization.
+- Server startup option `--db` to configure SQLite file path.
+- Regression cases `TC09.1/TC09.2` for restart persistence verification.
+- Unit test case `sqlite_store_roundtrip` in `duccore_tests`.
+- Conda-aware SQLite include/lib detection in helper scripts.
+
+### Changed
+- License state check in heartbeat path migrated from in-memory map to SQLite query.
+- Build scripts (`run_demo.sh`, `scripts/test_regression.sh`) now link SQLite and support conda environments.
+- Regression summary baseline expanded to PASS=14 with SQLite persistence covered.
+
+## [v1.1.0] - 2026-03-21
+
+### Added
 - Structured logging module with log level and request ID support.
 - Basic unit test target for token and parser logic (`duccore_tests`).
 

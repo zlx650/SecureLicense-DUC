@@ -1,7 +1,9 @@
 #include "log.hpp"
 
 #include <atomic>
+#include <algorithm>
 #include <chrono>
+#include <cctype>
 #include <ctime>
 #include <iomanip>
 #include <iostream>
@@ -66,6 +68,33 @@ std::string now_iso8601_utc() {
 
 void set_min_level(Level level) {
     g_min_level.store(static_cast<int>(level), std::memory_order_relaxed);
+}
+
+bool parse_level(const std::string& text, Level* out) {
+    std::string s = text;
+    std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) {
+        return static_cast<char>(std::toupper(c));
+    });
+
+    Level level = Level::Info;
+    if (s == "DEBUG") {
+        level = Level::Debug;
+    } else if (s == "INFO") {
+        level = Level::Info;
+    } else if (s == "WARN" || s == "WARNING") {
+        level = Level::Warn;
+    } else if (s == "ERROR") {
+        level = Level::Error;
+    } else {
+        return false;
+    }
+
+    if (out) *out = level;
+    return true;
+}
+
+std::string level_to_string(Level level) {
+    return level_name(level);
 }
 
 std::string generate_request_id() {

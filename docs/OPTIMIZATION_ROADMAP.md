@@ -15,6 +15,15 @@ Prioritize changes that improve interview defensibility, runtime reliability, an
 3. Test baseline expansion
 - Added unit test binary (`duccore_tests`) and integrated it into regression gate (TC00).
 
+4. Server-side persistence
+- Replaced in-memory license policy store with SQLite-backed persistence.
+- Added restart persistence regression coverage (TC09).
+
+5. Config file + CLI override
+- Added `server.conf` and `client.conf` for environment-specific parameters.
+- Implemented precedence: `default < config file < command line`.
+- Added regression coverage for config execution and override behavior (TC10/TC11).
+
 ## P0 (Next 1-2 iterations)
 
 1. Expand unit-test coverage depth
@@ -32,16 +41,11 @@ Prioritize changes that improve interview defensibility, runtime reliability, an
 - Target: HTTPS, optional mTLS.
 - Interview value: transport security.
 
-2. Persist server-side license state
-- Current: in-memory map.
-- Target: SQLite/PostgreSQL with schema and migration script.
-- Interview value: consistency, durability, recovery strategy.
-
-3. Add rate limit and abuse control
+2. Add rate limit and abuse control
 - Target: per-machine request limit and backoff.
 - Interview value: defensive backend design.
 
-4. Add metrics and pressure test tooling
+3. Add metrics and pressure test tooling
 - Target: latency, throughput, failure ratio, CPU/memory profile.
 - Interview value: performance and capacity planning.
 
@@ -60,7 +64,7 @@ Prioritize changes that improve interview defensibility, runtime reliability, an
 
 - C++ depth gaps: RAII usage patterns, exception-safe resource wrappers.
 - OS/network depth gaps: socket timeout policy, retry/backoff strategy.
-- Test depth gaps: currently no gtest/catch2 unit tests.
+- Test depth gaps: no gtest/catch2 framework yet, current tests are custom harness.
 - Operations gaps: no CI, no metrics dashboard, no structured log index.
 
 ## Recommended Iteration Rhythm
