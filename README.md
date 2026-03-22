@@ -186,6 +186,8 @@ cd /data/zhenglingxin/projects/SecureLicense-DUC-demo
 
 - `activate total/success/fail/qps`
 - `run total/success/fail/qps`
+- `activate/run latency_ms p50/p95/p99`
+- `activate_failures` / `run_failures`（失败分类统计）
 - `result: PASS/FAIL`
 
 如果你已经提前构建过二进制，可加 `--skip-build` 缩短执行时间。

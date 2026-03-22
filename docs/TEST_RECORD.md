@@ -58,7 +58,7 @@ Notes: <root cause / follow-up>
 ## 6. Current Baseline Result
 
 - Date: 2026-03-22
-- Version: v1.3.0
+- Version: v1.3.1
 - Executor: local (`conda env: cproject`)
 - Command: `./scripts/test_regression.sh`
 - Status: PASS
@@ -69,10 +69,10 @@ Notes: <root cause / follow-up>
 
 ```text
 Date: 2026-03-22
-Version: v1.3.0
+Version: v1.3.1
 Executor: local
 Command: ./scripts/test_regression.sh
 Result: PASS
 Failed Cases: none
-Notes: added benchmark smoke case (TC12), expanded unit test coverage for logging utilities, total PASS=19.
+Notes: benchmark script upgraded with failure classification and p95/p99 latency output, regression kept green at PASS=19.
 ```

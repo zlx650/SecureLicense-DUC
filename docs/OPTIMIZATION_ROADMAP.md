@@ -34,6 +34,10 @@ Prioritize changes that improve interview defensibility, runtime reliability, an
 8. CI pipeline baseline
 - Added GitHub Actions workflow to run regression checks on push/PR.
 
+9. Benchmark observability enhancement
+- Added failure category aggregation (`activate_failures` / `run_failures`).
+- Added latency percentile output (`p50`, `p95`, `p99`).
+
 ## P0 (Next 1-2 iterations)
 
 1. Expand unit-test coverage depth
@@ -56,7 +60,8 @@ Prioritize changes that improve interview defensibility, runtime reliability, an
 - Interview value: defensive backend design.
 
 3. Expand benchmark depth
-- Target: p95/p99 latency, error classification, and resource profile export.
+- Current: p50/p95/p99 and failure classification completed.
+- Target next: resource profile export (CPU/memory) and long-running trend capture.
 - Interview value: measurable performance methodology.
 
 ## P2 (Long-term)

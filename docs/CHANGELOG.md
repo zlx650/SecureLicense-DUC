@@ -10,6 +10,21 @@ All notable changes to this project will be documented in this file.
 ### Changed
 - No pending entries.
 
+## [v1.3.1] - 2026-03-22
+
+### Added
+- Benchmark output now includes latency percentiles:
+  - `p50`
+  - `p95`
+  - `p99`
+- Benchmark output now includes categorized failure summary:
+  - `activate_failures`
+  - `run_failures`
+
+### Changed
+- Benchmark result file format changed to `STATUS|LATENCY_MS|FAIL_CLASS` for easier post-analysis.
+- Regression baseline remains PASS=19, with `TC12` validating upgraded benchmark output path.
+
 ## [v1.3.0] - 2026-03-22
 
 ### Added
