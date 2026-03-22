@@ -10,6 +10,19 @@ All notable changes to this project will be documented in this file.
 ### Changed
 - No pending entries.
 
+## [v1.4.1] - 2026-03-22
+
+### Added
+- Client TLS option `--tls-server-name` for explicit certificate hostname verification.
+- Config key `client.tls_server_name`.
+- Regression case:
+  - `TC14` HTTPS hostname mismatch should fail.
+
+### Changed
+- TLS client now enforces hostname verification with SNI (`SSL_set1_host`).
+- Existing HTTPS regression cases (`TC13.*`) now pass explicit server name for deterministic verification.
+- Regression summary baseline expanded to PASS=23 with hostname mismatch coverage.
+
 ## [v1.4.0] - 2026-03-22
 
 ### Added

@@ -19,6 +19,7 @@ struct ClientConfig {
     int64_t grace_sec = 120;
     int timeout_ms = 1500;
     std::string tls_ca_path;
+    std::string tls_server_name;
     std::string log_level = "INFO";
     std::string config_path = "./config/client.conf";
 };
@@ -38,6 +39,7 @@ void print_usage(const char* exe) {
         << "  --grace 120\n"
         << "  --timeout 1500\n"
         << "  --tls-ca ./certs/ca.crt\n"
+        << "  --tls-server-name duc-demo.local\n"
         << "  --log-level INFO\n";
 }
 
@@ -72,6 +74,7 @@ bool apply_config_file(const std::string& path, bool required, ClientConfig* cfg
     if (duc::config::get_string(kv, "client.cache_path", &value)) cfg->cache_path = value;
     if (duc::config::get_string(kv, "client.secret", &value)) cfg->secret = value;
     if (duc::config::get_string(kv, "client.tls_ca_path", &value)) cfg->tls_ca_path = value;
+    if (duc::config::get_string(kv, "client.tls_server_name", &value)) cfg->tls_server_name = value;
     if (duc::config::get_string(kv, "client.log_level", &value)) cfg->log_level = value;
     return true;
 }
@@ -120,6 +123,8 @@ bool parse_common_args(int argc, char** argv, int start_idx, ClientConfig* cfg) 
             cfg->timeout_ms = std::stoi(argv[++i]);
         } else if (arg == "--tls-ca" && i + 1 < argc) {
             cfg->tls_ca_path = argv[++i];
+        } else if (arg == "--tls-server-name" && i + 1 < argc) {
+            cfg->tls_server_name = argv[++i];
         } else if (arg == "--log-level" && i + 1 < argc) {
             cfg->log_level = argv[++i];
         } else if (arg == "--help") {
@@ -142,6 +147,7 @@ int cmd_activate(const ClientConfig& cfg) {
     duc::HttpTlsOptions tls;
     tls.enable_tls = !cfg.tls_ca_path.empty();
     tls.ca_cert_path = cfg.tls_ca_path;
+    tls.server_name = cfg.tls_server_name;
 
     std::string target = "/activate?machine=" + duc::url_encode(cfg.machine);
     duc::HttpResponse resp = duc::http_get(cfg.host, cfg.port, target, cfg.timeout_ms, tls);
@@ -254,6 +260,7 @@ int cmd_run(const ClientConfig& cfg) {
     duc::HttpTlsOptions tls;
     tls.enable_tls = !cfg.tls_ca_path.empty();
     tls.ca_cert_path = cfg.tls_ca_path;
+    tls.server_name = cfg.tls_server_name;
     duc::HttpResponse resp = duc::http_get(cfg.host, cfg.port, target, cfg.timeout_ms, tls);
 
     if (resp.ok() && resp.status_code == 200) {

@@ -233,8 +233,16 @@ HttpResponse http_get(const std::string& host,
         }
 
         SSL_set_fd(ssl, fd);
-        if (!host.empty()) {
-            (void)SSL_set_tlsext_host_name(ssl, host.c_str());
+        const std::string verify_name = tls.server_name.empty() ? host : tls.server_name;
+        if (!verify_name.empty()) {
+            (void)SSL_set_tlsext_host_name(ssl, verify_name.c_str());
+            if (SSL_set1_host(ssl, verify_name.c_str()) != 1) {
+                out.error = "set tls verify host failed: " + collect_ssl_errors();
+                SSL_free(ssl);
+                SSL_CTX_free(ssl_ctx);
+                ::close(fd);
+                return out;
+            }
         }
 
         if (SSL_connect(ssl) != 1) {

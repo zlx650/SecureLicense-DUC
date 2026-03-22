@@ -7,6 +7,7 @@ namespace duc {
 struct HttpTlsOptions {
     bool enable_tls = false;
     std::string ca_cert_path;
+    std::string server_name;
 };
 
 struct HttpResponse {

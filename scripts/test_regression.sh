@@ -291,15 +291,19 @@ if command -v openssl >/dev/null 2>&1; then
 
   assert_success_contains "TC13.1 https activate with valid ca" "[activate] success" \
     "$BUILD_DIR/license_client" activate --host 127.0.0.1 --port "$PORT" --machine "$MACHINE" \
-    --cache "$CACHE_FILE" --tls-ca "$TLS_CERT_FILE"
+    --cache "$CACHE_FILE" --tls-ca "$TLS_CERT_FILE" --tls-server-name "duc-demo.local"
 
   assert_success_contains "TC13.2 https run with valid ca" "allowed (online heartbeat ok)" \
     "$BUILD_DIR/license_client" run --host 127.0.0.1 --port "$PORT" --machine "$MACHINE" \
-    --cache "$CACHE_FILE" --grace 5 --tls-ca "$TLS_CERT_FILE"
+    --cache "$CACHE_FILE" --grace 5 --tls-ca "$TLS_CERT_FILE" --tls-server-name "duc-demo.local"
 
   assert_fail_contains "TC13.3 https activate with wrong ca should fail" "certificate verify failed" \
     "$BUILD_DIR/license_client" activate --host 127.0.0.1 --port "$PORT" --machine "$MACHINE" \
-    --cache "$CACHE_FILE" --tls-ca "$TLS_BAD_CERT_FILE"
+    --cache "$CACHE_FILE" --tls-ca "$TLS_BAD_CERT_FILE" --tls-server-name "duc-demo.local"
+
+  assert_fail_contains "TC14 https hostname mismatch should fail" "certificate verify failed" \
+    "$BUILD_DIR/license_client" activate --host 127.0.0.1 --port "$PORT" --machine "$MACHINE" \
+    --cache "$CACHE_FILE" --tls-ca "$TLS_CERT_FILE" --tls-server-name "wrong.host.local"
 else
   fail "TC13 openssl not found"
 fi

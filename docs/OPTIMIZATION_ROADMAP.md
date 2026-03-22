@@ -42,6 +42,10 @@ Prioritize changes that improve interview defensibility, runtime reliability, an
 - Added optional TLS on server (`--tls-cert`, `--tls-key`) and client verification (`--tls-ca`).
 - Added TLS config keys and HTTPS regression coverage (TC13.1/TC13.2/TC13.3).
 
+11. TLS hostname verification
+- Added client option/config `tls_server_name` and enforced hostname validation.
+- Added regression coverage for hostname mismatch rejection (TC14).
+
 ## P0 (Next 1-2 iterations)
 
 1. Expand unit-test coverage depth
@@ -56,7 +60,8 @@ Prioritize changes that improve interview defensibility, runtime reliability, an
 ## P1 (Mid-term)
 
 1. Expand TLS hardening
-- Target: mTLS, hostname verification, and certificate rotation process.
+- Current: server cert, CA verification, and hostname verification completed.
+- Target next: mTLS and certificate rotation process.
 - Interview value: transport security depth.
 
 2. Add rate limit and abuse control
