@@ -10,6 +10,20 @@ All notable changes to this project will be documented in this file.
 ### Changed
 - No pending entries.
 
+## [v1.3.0] - 2026-03-22
+
+### Added
+- Benchmark script: `tools/benchmark/bench_license_flow.sh` for concurrent activate/run throughput smoke.
+- GitHub Actions CI: `.github/workflows/ci.yml` (build dependencies + regression test gate).
+- Regression case `TC12` for benchmark smoke verification.
+- Unit tests for logging utilities:
+  - `log_level_parse`
+  - `request_id_unique`
+
+### Changed
+- Client command path now emits structured JSON logs (`component=client`, `request_id`) across activate/run success and failure paths.
+- Regression summary baseline expanded to PASS=19 with benchmark smoke included.
+
 ## [v1.2.1] - 2026-03-21
 
 ### Added

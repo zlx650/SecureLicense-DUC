@@ -27,6 +27,7 @@ Track repeatable test evidence for each major update, including command, expecte
 | TC09 | Persistence after server restart | Allowed (online heartbeat ok) |
 | TC10 | Config file only execution | Activation and run succeed |
 | TC11 | CLI overrides config values | Override takes effect |
+| TC12 | Benchmark smoke | Script returns PASS |
 
 ## 4. How To Execute
 
@@ -56,22 +57,22 @@ Notes: <root cause / follow-up>
 
 ## 6. Current Baseline Result
 
-- Date: 2026-03-21
-- Version: v1.2.1
+- Date: 2026-03-22
+- Version: v1.3.0
 - Executor: local (`conda env: cproject`)
 - Command: `./scripts/test_regression.sh`
 - Status: PASS
-- Summary: PASS=18, FAIL=0
+- Summary: PASS=19, FAIL=0
 - Report: `test_artifacts/latest_test_report.txt`
 
 ## 7. Iteration History
 
 ```text
-Date: 2026-03-21
-Version: v1.2.1
+Date: 2026-03-22
+Version: v1.3.0
 Executor: local
 Command: ./scripts/test_regression.sh
 Result: PASS
 Failed Cases: none
-Notes: validated config-file execution and CLI override precedence (TC10/TC11), total PASS=18.
+Notes: added benchmark smoke case (TC12), expanded unit test coverage for logging utilities, total PASS=19.
 ```

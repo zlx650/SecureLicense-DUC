@@ -255,6 +255,11 @@ assert_fail_contains "TC11.1 config only with wrong port should fail" "request f
 assert_success_contains "TC11.2 CLI override port should pass" "[activate] success" \
   "$BUILD_DIR/license_client" activate --config "$CLIENT_OVERRIDE_CFG_FILE" --port "$PORT"
 
+# TC12: benchmark smoke
+assert_success_contains "TC12 benchmark smoke" "[bench] result: PASS" \
+  "$ROOT_DIR/tools/benchmark/bench_license_flow.sh" --skip-build --port "$((PORT + 1))" \
+  --parallel 4 --activate-requests 8 --run-requests 8 --duration 60
+
 log "[INFO] PASS=$PASS_COUNT FAIL=$FAIL_COUNT"
 
 if [[ "$FAIL_COUNT" -eq 0 ]]; then

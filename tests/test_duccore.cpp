@@ -1,5 +1,6 @@
 #include "common.hpp"
 #include "http.hpp"
+#include "log.hpp"
 #include "storage.hpp"
 
 #include <cstdio>
@@ -167,6 +168,25 @@ bool test_sqlite_store_roundtrip() {
     return true;
 }
 
+bool test_log_level_parse() {
+    duc::logging::Level level = duc::logging::Level::Info;
+    EXPECT_TRUE(duc::logging::parse_level("debug", &level));
+    EXPECT_EQ(duc::logging::level_to_string(level), "DEBUG");
+    EXPECT_TRUE(duc::logging::parse_level("WARNING", &level));
+    EXPECT_EQ(duc::logging::level_to_string(level), "WARN");
+    EXPECT_TRUE(!duc::logging::parse_level("INVALID", &level));
+    return true;
+}
+
+bool test_request_id_unique() {
+    const std::string a = duc::logging::generate_request_id();
+    const std::string b = duc::logging::generate_request_id();
+    EXPECT_TRUE(!a.empty());
+    EXPECT_TRUE(!b.empty());
+    EXPECT_TRUE(a != b);
+    return true;
+}
+
 }  // namespace
 
 int main() {
@@ -180,6 +200,8 @@ int main() {
         {"cache_roundtrip", test_cache_roundtrip},
         {"sign_is_deterministic", test_sign_is_deterministic},
         {"sqlite_store_roundtrip", test_sqlite_store_roundtrip},
+        {"log_level_parse", test_log_level_parse},
+        {"request_id_unique", test_request_id_unique},
     };
 
     int pass = 0;

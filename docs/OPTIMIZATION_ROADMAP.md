@@ -24,6 +24,16 @@ Prioritize changes that improve interview defensibility, runtime reliability, an
 - Implemented precedence: `default < config file < command line`.
 - Added regression coverage for config execution and override behavior (TC10/TC11).
 
+6. Client structured logging completion
+- Added request-level JSON logs on activate/run paths for both success and failure branches.
+
+7. Benchmark and pressure tooling (smoke level)
+- Added `tools/benchmark/bench_license_flow.sh` for concurrent activation and heartbeat throughput checks.
+- Integrated benchmark smoke into regression suite (TC12).
+
+8. CI pipeline baseline
+- Added GitHub Actions workflow to run regression checks on push/PR.
+
 ## P0 (Next 1-2 iterations)
 
 1. Expand unit-test coverage depth
@@ -45,9 +55,9 @@ Prioritize changes that improve interview defensibility, runtime reliability, an
 - Target: per-machine request limit and backoff.
 - Interview value: defensive backend design.
 
-3. Add metrics and pressure test tooling
-- Target: latency, throughput, failure ratio, CPU/memory profile.
-- Interview value: performance and capacity planning.
+3. Expand benchmark depth
+- Target: p95/p99 latency, error classification, and resource profile export.
+- Interview value: measurable performance methodology.
 
 ## P2 (Long-term)
 
@@ -57,15 +67,15 @@ Prioritize changes that improve interview defensibility, runtime reliability, an
 2. Introduce configurable policy engine
 - Grace policy, expiry policy, machine binding policy.
 
-3. Add CI pipeline
-- Build + lint + unit test + regression script.
+3. Expand CI pipeline
+- Add lint stage, sanitizer build, and coverage upload.
 
 ## Interview-focused Gap Summary
 
 - C++ depth gaps: RAII usage patterns, exception-safe resource wrappers.
 - OS/network depth gaps: socket timeout policy, retry/backoff strategy.
 - Test depth gaps: no gtest/catch2 framework yet, current tests are custom harness.
-- Operations gaps: no CI, no metrics dashboard, no structured log index.
+- Operations gaps: no metrics dashboard and no centralized structured-log index.
 
 ## Recommended Iteration Rhythm
 

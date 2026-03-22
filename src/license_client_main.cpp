@@ -130,13 +130,21 @@ bool parse_common_args(int argc, char** argv, int start_idx, ClientConfig* cfg) 
 }
 
 int cmd_activate(const ClientConfig& cfg) {
+    const std::string request_id = duc::logging::generate_request_id();
+    duc::logging::info("client", request_id, "activate start",
+                       {{"host", cfg.host}, {"port", std::to_string(cfg.port)}, {"machine", cfg.machine}});
+
     std::string target = "/activate?machine=" + duc::url_encode(cfg.machine);
     duc::HttpResponse resp = duc::http_get(cfg.host, cfg.port, target, cfg.timeout_ms);
     if (!resp.ok()) {
+        duc::logging::error("client", request_id, "activate request failed",
+                            {{"error", resp.error}, {"host", cfg.host}, {"port", std::to_string(cfg.port)}});
         std::cerr << "[activate] request failed: " << resp.error << "\n";
         return 2;
     }
     if (resp.status_code != 200) {
+        duc::logging::warn("client", request_id, "activate rejected",
+                           {{"status", std::to_string(resp.status_code)}});
         std::cerr << "[activate] server reject, status=" << resp.status_code
                   << ", body=" << resp.body << "\n";
         return 2;
@@ -148,6 +156,7 @@ int cmd_activate(const ClientConfig& cfg) {
     if (!duc::json_get_string(resp.body, "token", &token) ||
         !duc::json_get_int64(resp.body, "server_time", &server_time) ||
         !duc::json_get_int64(resp.body, "expires_at", &expires_at)) {
+        duc::logging::error("client", request_id, "activate response parse failed");
         std::cerr << "[activate] invalid server response: " << resp.body << "\n";
         return 2;
     }
@@ -160,9 +169,13 @@ int cmd_activate(const ClientConfig& cfg) {
     cache.last_local_time = duc::now_epoch_sec();
 
     if (!duc::save_cache(cfg.cache_path, cache)) {
+        duc::logging::error("client", request_id, "activate save cache failed", {{"cache", cfg.cache_path}});
         std::cerr << "[activate] save cache failed: " << cfg.cache_path << "\n";
         return 2;
     }
+
+    duc::logging::info("client", request_id, "activate success",
+                       {{"machine", cfg.machine}, {"expires_at", std::to_string(expires_at)}});
 
     std::cout << "[activate] success\n";
     std::cout << "  machine    : " << cfg.machine << "\n";
@@ -206,8 +219,13 @@ bool precheck_local(const ClientConfig& cfg,
 }
 
 int cmd_run(const ClientConfig& cfg) {
+    const std::string request_id = duc::logging::generate_request_id();
+    duc::logging::info("client", request_id, "run start",
+                       {{"host", cfg.host}, {"port", std::to_string(cfg.port)}, {"machine", cfg.machine}});
+
     duc::ClientCache cache;
     if (!duc::load_cache(cfg.cache_path, &cache)) {
+        duc::logging::error("client", request_id, "run cache load failed", {{"cache", cfg.cache_path}});
         std::cerr << "[run] no cache found, run activate first: " << cfg.cache_path << "\n";
         return 3;
     }
@@ -217,6 +235,7 @@ int cmd_run(const ClientConfig& cfg) {
     if (!precheck_local(cfg, &cache, &payload, &reason)) {
         cache.last_local_time = duc::now_epoch_sec();
         duc::save_cache(cfg.cache_path, cache);
+        duc::logging::warn("client", request_id, "run local precheck denied", {{"reason", reason}});
         std::cerr << "[run] denied (local precheck): " << reason << "\n";
         return 3;
     }
@@ -228,11 +247,13 @@ int cmd_run(const ClientConfig& cfg) {
     if (resp.ok() && resp.status_code == 200) {
         int64_t server_time = 0;
         if (!duc::json_get_int64(resp.body, "server_time", &server_time)) {
+            duc::logging::error("client", request_id, "heartbeat parse failed");
             std::cerr << "[run] denied: heartbeat response parse failed\n";
             return 3;
         }
 
         if (cache.last_server_time > 0 && server_time + 2 < cache.last_server_time) {
+            duc::logging::warn("client", request_id, "server time rollback detected");
             std::cerr << "[run] denied: server time rollback detected\n";
             return 3;
         }
@@ -241,9 +262,11 @@ int cmd_run(const ClientConfig& cfg) {
         cache.last_heartbeat_time = server_time;
         cache.last_local_time = duc::now_epoch_sec();
         if (!duc::save_cache(cfg.cache_path, cache)) {
+            duc::logging::warn("client", request_id, "save cache warning", {{"cache", cfg.cache_path}});
             std::cerr << "[run] warning: cache save failed\n";
         }
 
+        duc::logging::info("client", request_id, "run allowed online");
         std::cout << "[run] allowed (online heartbeat ok)\n";
         return 0;
     }
@@ -255,6 +278,9 @@ int cmd_run(const ClientConfig& cfg) {
         cache.last_local_time = now;
         duc::save_cache(cfg.cache_path, cache);
 
+        duc::logging::warn("client", request_id, "run allowed by offline grace",
+                           {{"offline_for", std::to_string(offline_for)},
+                            {"grace_sec", std::to_string(cfg.grace_sec)}});
         std::cout << "[run] allowed (offline grace mode)\n";
         std::cout << "  offline_for: " << offline_for << " sec\n";
         std::cout << "  grace_sec  : " << cfg.grace_sec << " sec\n";
@@ -263,6 +289,9 @@ int cmd_run(const ClientConfig& cfg) {
 
     cache.last_local_time = now;
     duc::save_cache(cfg.cache_path, cache);
+    duc::logging::error("client", request_id, "run denied: grace exceeded",
+                        {{"offline_for", std::to_string(offline_for)},
+                         {"grace_sec", std::to_string(cfg.grace_sec)}});
     std::cerr << "[run] denied: heartbeat failed and grace exceeded\n";
     if (!resp.error.empty()) {
         std::cerr << "  network_error: " << resp.error << "\n";
