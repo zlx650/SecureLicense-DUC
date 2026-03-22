@@ -11,23 +11,31 @@ DB_FILE="/tmp/duc_server_demo.db"
 
 SQLITE_CFLAGS=""
 SQLITE_LDFLAGS="-lsqlite3"
+OPENSSL_CFLAGS=""
+OPENSSL_LDFLAGS="-lssl -lcrypto"
 
 if [[ -n "${CONDA_PREFIX:-}" ]] && [[ -f "${CONDA_PREFIX}/include/sqlite3.h" ]]; then
   SQLITE_CFLAGS="-I${CONDA_PREFIX}/include"
   SQLITE_LDFLAGS="-L${CONDA_PREFIX}/lib -lsqlite3"
   export LD_LIBRARY_PATH="${CONDA_PREFIX}/lib:${LD_LIBRARY_PATH:-}"
 fi
+if [[ -n "${CONDA_PREFIX:-}" ]] && [[ -f "${CONDA_PREFIX}/include/openssl/ssl.h" ]]; then
+  OPENSSL_CFLAGS="-I${CONDA_PREFIX}/include"
+  OPENSSL_LDFLAGS="-L${CONDA_PREFIX}/lib -lssl -lcrypto"
+  export LD_LIBRARY_PATH="${CONDA_PREFIX}/lib:${LD_LIBRARY_PATH:-}"
+fi
 
 mkdir -p "$BUILD_DIR"
 
 g++ -std=c++17 -O2 -I"$ROOT_DIR/include" \
-  $SQLITE_CFLAGS \
+  $SQLITE_CFLAGS $OPENSSL_CFLAGS \
   "$ROOT_DIR/src/config.cpp" "$ROOT_DIR/src/common.cpp" "$ROOT_DIR/src/http.cpp" "$ROOT_DIR/src/log.cpp" "$ROOT_DIR/src/storage.cpp" "$ROOT_DIR/src/license_server_main.cpp" \
-  $SQLITE_LDFLAGS -o "$BUILD_DIR/license_server"
+  $SQLITE_LDFLAGS $OPENSSL_LDFLAGS -o "$BUILD_DIR/license_server"
 
 g++ -std=c++17 -O2 -I"$ROOT_DIR/include" \
+  $OPENSSL_CFLAGS \
   "$ROOT_DIR/src/config.cpp" "$ROOT_DIR/src/common.cpp" "$ROOT_DIR/src/http.cpp" "$ROOT_DIR/src/log.cpp" "$ROOT_DIR/src/license_client_main.cpp" \
-  -o "$BUILD_DIR/license_client"
+  $OPENSSL_LDFLAGS -o "$BUILD_DIR/license_client"
 
 rm -f "$CACHE_FILE" "$SERVER_LOG" "$DB_FILE"
 "$BUILD_DIR/license_server" --port "$PORT" --duration 40 --db "$DB_FILE" > "$SERVER_LOG" 2>&1 &

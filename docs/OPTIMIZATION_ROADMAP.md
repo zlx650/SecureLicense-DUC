@@ -38,6 +38,10 @@ Prioritize changes that improve interview defensibility, runtime reliability, an
 - Added failure category aggregation (`activate_failures` / `run_failures`).
 - Added latency percentile output (`p50`, `p95`, `p99`).
 
+10. HTTPS transport baseline
+- Added optional TLS on server (`--tls-cert`, `--tls-key`) and client verification (`--tls-ca`).
+- Added TLS config keys and HTTPS regression coverage (TC13.1/TC13.2/TC13.3).
+
 ## P0 (Next 1-2 iterations)
 
 1. Expand unit-test coverage depth
@@ -51,9 +55,9 @@ Prioritize changes that improve interview defensibility, runtime reliability, an
 
 ## P1 (Mid-term)
 
-1. Use TLS for client-server communication
-- Target: HTTPS, optional mTLS.
-- Interview value: transport security.
+1. Expand TLS hardening
+- Target: mTLS, hostname verification, and certificate rotation process.
+- Interview value: transport security depth.
 
 2. Add rate limit and abuse control
 - Target: per-machine request limit and backoff.

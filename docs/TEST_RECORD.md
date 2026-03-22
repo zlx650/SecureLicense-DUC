@@ -28,6 +28,7 @@ Track repeatable test evidence for each major update, including command, expecte
 | TC10 | Config file only execution | Activation and run succeed |
 | TC11 | CLI overrides config values | Override takes effect |
 | TC12 | Benchmark smoke | Script returns PASS |
+| TC13 | HTTPS with server cert + client verify | Valid CA succeeds, wrong CA fails |
 
 ## 4. How To Execute
 
@@ -58,21 +59,21 @@ Notes: <root cause / follow-up>
 ## 6. Current Baseline Result
 
 - Date: 2026-03-22
-- Version: v1.3.1
+- Version: v1.4.0
 - Executor: local (`conda env: cproject`)
 - Command: `./scripts/test_regression.sh`
 - Status: PASS
-- Summary: PASS=19, FAIL=0
+- Summary: PASS=22, FAIL=0
 - Report: `test_artifacts/latest_test_report.txt`
 
 ## 7. Iteration History
 
 ```text
 Date: 2026-03-22
-Version: v1.3.1
+Version: v1.4.0
 Executor: local
 Command: ./scripts/test_regression.sh
 Result: PASS
 Failed Cases: none
-Notes: benchmark script upgraded with failure classification and p95/p99 latency output, regression kept green at PASS=19.
+Notes: added HTTPS coverage (valid CA and wrong CA failure), regression kept green at PASS=22.
 ```

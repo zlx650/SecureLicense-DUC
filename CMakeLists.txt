@@ -10,6 +10,7 @@ if(DEFINED ENV{CONDA_PREFIX})
 endif()
 
 find_package(SQLite3 REQUIRED)
+find_package(OpenSSL REQUIRED)
 
 add_library(duccore
     src/config.cpp
@@ -20,6 +21,7 @@ add_library(duccore
 )
 
 target_include_directories(duccore PUBLIC include)
+target_link_libraries(duccore PUBLIC OpenSSL::SSL OpenSSL::Crypto)
 
 add_executable(license_server src/license_server_main.cpp)
 target_link_libraries(license_server PRIVATE duccore SQLite::SQLite3)

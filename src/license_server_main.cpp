@@ -9,6 +9,9 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include <openssl/err.h>
+#include <openssl/ssl.h>
+
 #include <cerrno>
 #include <cstring>
 #include <iostream>
@@ -22,6 +25,8 @@ struct ServerConfig {
     std::string secret = "DUC_DEMO_SECRET_CHANGE_ME";
     int64_t duration_sec = 3600;
     std::string db_path = "./license_store.db";
+    std::string tls_cert_path;
+    std::string tls_key_path;
     std::string log_level = "INFO";
     std::string config_path = "./config/server.conf";
 };
@@ -29,7 +34,8 @@ struct ServerConfig {
 void print_usage(const char* exe) {
     std::cout << "Usage: " << exe
               << " [--config ./config/server.conf] [--port 8088] [--duration 3600] "
-                 "[--secret xxx] [--db ./license_store.db] [--log-level INFO]\n";
+                 "[--secret xxx] [--db ./license_store.db] [--tls-cert ./certs/server.crt] "
+                 "[--tls-key ./certs/server.key] [--log-level INFO]\n";
 }
 
 bool apply_config_file(const std::string& path, bool required, ServerConfig* cfg) {
@@ -55,6 +61,8 @@ bool apply_config_file(const std::string& path, bool required, ServerConfig* cfg
     std::string value;
     if (duc::config::get_string(kv, "server.secret", &value)) cfg->secret = value;
     if (duc::config::get_string(kv, "server.db_path", &value)) cfg->db_path = value;
+    if (duc::config::get_string(kv, "server.tls_cert_path", &value)) cfg->tls_cert_path = value;
+    if (duc::config::get_string(kv, "server.tls_key_path", &value)) cfg->tls_key_path = value;
     if (duc::config::get_string(kv, "server.log_level", &value)) cfg->log_level = value;
     return true;
 }
@@ -95,6 +103,10 @@ bool parse_args(int argc, char** argv, ServerConfig* cfg) {
             cfg->secret = argv[++i];
         } else if (arg == "--db" && i + 1 < argc) {
             cfg->db_path = argv[++i];
+        } else if (arg == "--tls-cert" && i + 1 < argc) {
+            cfg->tls_cert_path = argv[++i];
+        } else if (arg == "--tls-key" && i + 1 < argc) {
+            cfg->tls_key_path = argv[++i];
         } else if (arg == "--log-level" && i + 1 < argc) {
             cfg->log_level = argv[++i];
         } else if (arg == "--help") {
@@ -107,6 +119,10 @@ bool parse_args(int argc, char** argv, ServerConfig* cfg) {
         }
     }
     return true;
+}
+
+bool tls_enabled(const ServerConfig& cfg) {
+    return !cfg.tls_cert_path.empty() && !cfg.tls_key_path.empty();
 }
 
 std::string json_escape(const std::string& s) {
@@ -133,11 +149,26 @@ std::string path_only(const std::string& target) {
     return target.substr(0, q);
 }
 
-std::string read_http_request(int fd) {
+std::string read_http_request(int fd, SSL* ssl) {
     std::string req;
     char buf[2048];
     while (req.find("\r\n\r\n") == std::string::npos) {
-        ssize_t n = ::recv(fd, buf, sizeof(buf), 0);
+        ssize_t n = 0;
+        if (ssl) {
+            n = SSL_read(ssl, buf, static_cast<int>(sizeof(buf)));
+            if (n <= 0) {
+                int err = SSL_get_error(ssl, static_cast<int>(n));
+                if (err == SSL_ERROR_WANT_READ || err == SSL_ERROR_WANT_WRITE) {
+                    continue;
+                }
+                break;
+            }
+        } else {
+            n = ::recv(fd, buf, sizeof(buf), 0);
+            if (n <= 0) {
+                break;
+            }
+        }
         if (n <= 0) {
             break;
         }
@@ -281,6 +312,13 @@ int main(int argc, char** argv) {
     }
     duc::logging::set_min_level(level);
 
+    if ((!cfg.tls_cert_path.empty() && cfg.tls_key_path.empty()) ||
+        (cfg.tls_cert_path.empty() && !cfg.tls_key_path.empty())) {
+        duc::logging::error("server", "-", "invalid tls config",
+                            {{"tls_cert_path", cfg.tls_cert_path}, {"tls_key_path", cfg.tls_key_path}});
+        return 1;
+    }
+
     duc::LicenseStore store;
     std::string db_err;
     if (!store.open(cfg.db_path, &db_err)) {
@@ -315,10 +353,40 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    SSL_CTX* tls_ctx = nullptr;
+    if (tls_enabled(cfg)) {
+        tls_ctx = SSL_CTX_new(TLS_server_method());
+        if (!tls_ctx) {
+            duc::logging::error("server", "-", "tls ctx init failed");
+            ::close(listen_fd);
+            return 1;
+        }
+        SSL_CTX_set_min_proto_version(tls_ctx, TLS1_2_VERSION);
+        if (SSL_CTX_use_certificate_file(tls_ctx, cfg.tls_cert_path.c_str(), SSL_FILETYPE_PEM) != 1) {
+            duc::logging::error("server", "-", "load tls cert failed", {{"path", cfg.tls_cert_path}});
+            SSL_CTX_free(tls_ctx);
+            ::close(listen_fd);
+            return 1;
+        }
+        if (SSL_CTX_use_PrivateKey_file(tls_ctx, cfg.tls_key_path.c_str(), SSL_FILETYPE_PEM) != 1) {
+            duc::logging::error("server", "-", "load tls key failed", {{"path", cfg.tls_key_path}});
+            SSL_CTX_free(tls_ctx);
+            ::close(listen_fd);
+            return 1;
+        }
+        if (SSL_CTX_check_private_key(tls_ctx) != 1) {
+            duc::logging::error("server", "-", "tls key mismatch with cert");
+            SSL_CTX_free(tls_ctx);
+            ::close(listen_fd);
+            return 1;
+        }
+    }
+
     duc::logging::info("server", "-", "server started",
                        {{"listen", "0.0.0.0:" + std::to_string(cfg.port)},
                         {"license_duration_sec", std::to_string(cfg.duration_sec)},
-                        {"db_path", cfg.db_path}});
+                        {"db_path", cfg.db_path},
+                        {"transport", tls_enabled(cfg) ? "https" : "http"}});
 
     while (true) {
         sockaddr_in peer{};
@@ -329,8 +397,25 @@ int main(int argc, char** argv) {
             continue;
         }
 
+        SSL* ssl = nullptr;
+        if (tls_ctx) {
+            ssl = SSL_new(tls_ctx);
+            if (!ssl) {
+                duc::logging::error("server", "-", "ssl object init failed");
+                ::close(conn_fd);
+                continue;
+            }
+            SSL_set_fd(ssl, conn_fd);
+            if (SSL_accept(ssl) != 1) {
+                duc::logging::warn("server", "-", "tls handshake failed");
+                SSL_free(ssl);
+                ::close(conn_fd);
+                continue;
+            }
+        }
+
         const std::string request_id = duc::logging::generate_request_id();
-        std::string req = read_http_request(conn_fd);
+        std::string req = read_http_request(conn_fd, ssl);
         size_t line_end = req.find("\r\n");
         std::string first_line = (line_end == std::string::npos) ? req : req.substr(0, line_end);
 
@@ -355,13 +440,29 @@ int main(int argc, char** argv) {
         }
 
         const std::string resp = duc::make_json_response(status, body);
-        (void)::send(conn_fd, resp.data(), resp.size(), 0);
+        if (ssl) {
+            size_t sent_total = 0;
+            while (sent_total < resp.size()) {
+                int n = SSL_write(ssl, resp.data() + sent_total, static_cast<int>(resp.size() - sent_total));
+                if (n <= 0) {
+                    break;
+                }
+                sent_total += static_cast<size_t>(n);
+            }
+            SSL_shutdown(ssl);
+            SSL_free(ssl);
+        } else {
+            (void)::send(conn_fd, resp.data(), resp.size(), 0);
+        }
         ::close(conn_fd);
 
         duc::logging::info("server", request_id, "request completed",
                            {{"status", std::to_string(status)}, {"method", method}, {"target", target}});
     }
 
+    if (tls_ctx) {
+        SSL_CTX_free(tls_ctx);
+    }
     ::close(listen_fd);
     return 0;
 }

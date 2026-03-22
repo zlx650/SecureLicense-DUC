@@ -11,6 +11,9 @@ DB_FILE="$ARTIFACT_DIR/license_store_test.db"
 SERVER_CFG_FILE="$ARTIFACT_DIR/server_test.conf"
 CLIENT_CFG_FILE="$ARTIFACT_DIR/client_test.conf"
 CLIENT_OVERRIDE_CFG_FILE="$ARTIFACT_DIR/client_override_test.conf"
+TLS_CERT_FILE="$ARTIFACT_DIR/server_tls.crt"
+TLS_KEY_FILE="$ARTIFACT_DIR/server_tls.key"
+TLS_BAD_CERT_FILE="$ARTIFACT_DIR/wrong_ca.crt"
 PORT="${1:-18091}"
 MACHINE="qa-node-01"
 
@@ -19,10 +22,17 @@ FAIL_COUNT=0
 
 SQLITE_CFLAGS=""
 SQLITE_LDFLAGS="-lsqlite3"
+OPENSSL_CFLAGS=""
+OPENSSL_LDFLAGS="-lssl -lcrypto"
 
 if [[ -n "${CONDA_PREFIX:-}" ]] && [[ -f "${CONDA_PREFIX}/include/sqlite3.h" ]]; then
   SQLITE_CFLAGS="-I${CONDA_PREFIX}/include"
   SQLITE_LDFLAGS="-L${CONDA_PREFIX}/lib -lsqlite3"
+  export LD_LIBRARY_PATH="${CONDA_PREFIX}/lib:${LD_LIBRARY_PATH:-}"
+fi
+if [[ -n "${CONDA_PREFIX:-}" ]] && [[ -f "${CONDA_PREFIX}/include/openssl/ssl.h" ]]; then
+  OPENSSL_CFLAGS="-I${CONDA_PREFIX}/include"
+  OPENSSL_LDFLAGS="-L${CONDA_PREFIX}/lib -lssl -lcrypto"
   export LD_LIBRARY_PATH="${CONDA_PREFIX}/lib:${LD_LIBRARY_PATH:-}"
 fi
 
@@ -117,23 +127,25 @@ assert_fail_contains() {
 build_binaries() {
   log "[INFO] Building binaries"
   g++ -std=c++17 -O2 -I"$ROOT_DIR/include" \
-    $SQLITE_CFLAGS \
+    $SQLITE_CFLAGS $OPENSSL_CFLAGS \
     "$ROOT_DIR/src/config.cpp" "$ROOT_DIR/src/common.cpp" "$ROOT_DIR/src/http.cpp" "$ROOT_DIR/src/log.cpp" "$ROOT_DIR/src/storage.cpp" "$ROOT_DIR/src/license_server_main.cpp" \
-    $SQLITE_LDFLAGS -o "$BUILD_DIR/license_server"
+    $SQLITE_LDFLAGS $OPENSSL_LDFLAGS -o "$BUILD_DIR/license_server"
 
   g++ -std=c++17 -O2 -I"$ROOT_DIR/include" \
+    $OPENSSL_CFLAGS \
     "$ROOT_DIR/src/config.cpp" "$ROOT_DIR/src/common.cpp" "$ROOT_DIR/src/http.cpp" "$ROOT_DIR/src/log.cpp" "$ROOT_DIR/src/license_client_main.cpp" \
-    -o "$BUILD_DIR/license_client"
+    $OPENSSL_LDFLAGS -o "$BUILD_DIR/license_client"
 
   g++ -std=c++17 -O2 -I"$ROOT_DIR/include" \
-    $SQLITE_CFLAGS \
+    $SQLITE_CFLAGS $OPENSSL_CFLAGS \
     "$ROOT_DIR/src/config.cpp" "$ROOT_DIR/src/common.cpp" "$ROOT_DIR/src/http.cpp" "$ROOT_DIR/src/log.cpp" "$ROOT_DIR/src/storage.cpp" "$ROOT_DIR/tests/test_duccore.cpp" \
-    $SQLITE_LDFLAGS -o "$BUILD_DIR/duccore_tests"
+    $SQLITE_LDFLAGS $OPENSSL_LDFLAGS -o "$BUILD_DIR/duccore_tests"
 }
 
 cleanup() {
   stop_server
-  rm -f "$CACHE_FILE" "$DB_FILE" "$SERVER_CFG_FILE" "$CLIENT_CFG_FILE" "$CLIENT_OVERRIDE_CFG_FILE"
+  rm -f "$CACHE_FILE" "$DB_FILE" "$SERVER_CFG_FILE" "$CLIENT_CFG_FILE" "$CLIENT_OVERRIDE_CFG_FILE" \
+    "$TLS_CERT_FILE" "$TLS_KEY_FILE" "$TLS_BAD_CERT_FILE"
 }
 
 trap cleanup EXIT
@@ -259,6 +271,38 @@ assert_success_contains "TC11.2 CLI override port should pass" "[activate] succe
 assert_success_contains "TC12 benchmark smoke" "[bench] result: PASS" \
   "$ROOT_DIR/tools/benchmark/bench_license_flow.sh" --skip-build --port "$((PORT + 1))" \
   --parallel 4 --activate-requests 8 --run-requests 8 --duration 60
+
+# TC13: HTTPS with server cert + client verification
+if command -v openssl >/dev/null 2>&1; then
+  rm -f "$CACHE_FILE" "$DB_FILE" "$TLS_CERT_FILE" "$TLS_KEY_FILE" "$TLS_BAD_CERT_FILE"
+  openssl req -x509 -newkey rsa:2048 -sha256 -days 1 -nodes \
+    -keyout "$TLS_KEY_FILE" -out "$TLS_CERT_FILE" \
+    -subj "/CN=duc-demo.local" >/dev/null 2>&1
+  openssl req -x509 -newkey rsa:2048 -sha256 -days 1 -nodes \
+    -keyout /tmp/duc_wrong_ca.key -out "$TLS_BAD_CERT_FILE" \
+    -subj "/CN=duc-demo-wrong-ca" >/dev/null 2>&1
+  rm -f /tmp/duc_wrong_ca.key
+
+  stop_server
+  "$BUILD_DIR/license_server" --port "$PORT" --duration 60 --db "$DB_FILE" \
+    --tls-cert "$TLS_CERT_FILE" --tls-key "$TLS_KEY_FILE" > "$SERVER_LOG" 2>&1 &
+  SERVER_PID=$!
+  sleep 1
+
+  assert_success_contains "TC13.1 https activate with valid ca" "[activate] success" \
+    "$BUILD_DIR/license_client" activate --host 127.0.0.1 --port "$PORT" --machine "$MACHINE" \
+    --cache "$CACHE_FILE" --tls-ca "$TLS_CERT_FILE"
+
+  assert_success_contains "TC13.2 https run with valid ca" "allowed (online heartbeat ok)" \
+    "$BUILD_DIR/license_client" run --host 127.0.0.1 --port "$PORT" --machine "$MACHINE" \
+    --cache "$CACHE_FILE" --grace 5 --tls-ca "$TLS_CERT_FILE"
+
+  assert_fail_contains "TC13.3 https activate with wrong ca should fail" "certificate verify failed" \
+    "$BUILD_DIR/license_client" activate --host 127.0.0.1 --port "$PORT" --machine "$MACHINE" \
+    --cache "$CACHE_FILE" --tls-ca "$TLS_BAD_CERT_FILE"
+else
+  fail "TC13 openssl not found"
+fi
 
 log "[INFO] PASS=$PASS_COUNT FAIL=$FAIL_COUNT"
 

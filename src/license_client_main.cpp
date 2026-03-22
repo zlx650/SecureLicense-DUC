@@ -18,6 +18,7 @@ struct ClientConfig {
     std::string secret = "DUC_DEMO_SECRET_CHANGE_ME";
     int64_t grace_sec = 120;
     int timeout_ms = 1500;
+    std::string tls_ca_path;
     std::string log_level = "INFO";
     std::string config_path = "./config/client.conf";
 };
@@ -36,6 +37,7 @@ void print_usage(const char* exe) {
         << "  --secret DUC_DEMO_SECRET_CHANGE_ME\n"
         << "  --grace 120\n"
         << "  --timeout 1500\n"
+        << "  --tls-ca ./certs/ca.crt\n"
         << "  --log-level INFO\n";
 }
 
@@ -69,6 +71,7 @@ bool apply_config_file(const std::string& path, bool required, ClientConfig* cfg
     if (duc::config::get_string(kv, "client.machine", &value)) cfg->machine = value;
     if (duc::config::get_string(kv, "client.cache_path", &value)) cfg->cache_path = value;
     if (duc::config::get_string(kv, "client.secret", &value)) cfg->secret = value;
+    if (duc::config::get_string(kv, "client.tls_ca_path", &value)) cfg->tls_ca_path = value;
     if (duc::config::get_string(kv, "client.log_level", &value)) cfg->log_level = value;
     return true;
 }
@@ -115,6 +118,8 @@ bool parse_common_args(int argc, char** argv, int start_idx, ClientConfig* cfg) 
             cfg->grace_sec = std::stoll(argv[++i]);
         } else if (arg == "--timeout" && i + 1 < argc) {
             cfg->timeout_ms = std::stoi(argv[++i]);
+        } else if (arg == "--tls-ca" && i + 1 < argc) {
+            cfg->tls_ca_path = argv[++i];
         } else if (arg == "--log-level" && i + 1 < argc) {
             cfg->log_level = argv[++i];
         } else if (arg == "--help") {
@@ -134,8 +139,12 @@ int cmd_activate(const ClientConfig& cfg) {
     duc::logging::info("client", request_id, "activate start",
                        {{"host", cfg.host}, {"port", std::to_string(cfg.port)}, {"machine", cfg.machine}});
 
+    duc::HttpTlsOptions tls;
+    tls.enable_tls = !cfg.tls_ca_path.empty();
+    tls.ca_cert_path = cfg.tls_ca_path;
+
     std::string target = "/activate?machine=" + duc::url_encode(cfg.machine);
-    duc::HttpResponse resp = duc::http_get(cfg.host, cfg.port, target, cfg.timeout_ms);
+    duc::HttpResponse resp = duc::http_get(cfg.host, cfg.port, target, cfg.timeout_ms, tls);
     if (!resp.ok()) {
         duc::logging::error("client", request_id, "activate request failed",
                             {{"error", resp.error}, {"host", cfg.host}, {"port", std::to_string(cfg.port)}});
@@ -242,7 +251,10 @@ int cmd_run(const ClientConfig& cfg) {
 
     std::string target = "/heartbeat?machine=" + duc::url_encode(cfg.machine)
                        + "&token=" + duc::url_encode(cache.token);
-    duc::HttpResponse resp = duc::http_get(cfg.host, cfg.port, target, cfg.timeout_ms);
+    duc::HttpTlsOptions tls;
+    tls.enable_tls = !cfg.tls_ca_path.empty();
+    tls.ca_cert_path = cfg.tls_ca_path;
+    duc::HttpResponse resp = duc::http_get(cfg.host, cfg.port, target, cfg.timeout_ms, tls);
 
     if (resp.ok() && resp.status_code == 200) {
         int64_t server_time = 0;

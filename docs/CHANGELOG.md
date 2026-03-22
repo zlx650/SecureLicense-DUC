@@ -10,6 +10,27 @@ All notable changes to this project will be documented in this file.
 ### Changed
 - No pending entries.
 
+## [v1.4.0] - 2026-03-22
+
+### Added
+- HTTPS transport support:
+  - Server options: `--tls-cert`, `--tls-key`
+  - Client option: `--tls-ca`
+- Config keys for TLS:
+  - `server.tls_cert_path`
+  - `server.tls_key_path`
+  - `client.tls_ca_path`
+- Regression cases:
+  - `TC13.1` HTTPS activate with valid CA
+  - `TC13.2` HTTPS heartbeat run with valid CA
+  - `TC13.3` HTTPS activate with wrong CA (expected fail)
+
+### Changed
+- HTTP client now supports optional TLS handshake and certificate verification.
+- Server request loop supports HTTP/HTTPS dual mode with TLS enabled by runtime config.
+- Build scripts and CI now link/install OpenSSL (`-lssl -lcrypto`).
+- Regression summary baseline expanded to PASS=22 with HTTPS path coverage.
+
 ## [v1.3.1] - 2026-03-22
 
 ### Added

@@ -6,11 +6,112 @@
 #include <sys/time.h>
 #include <unistd.h>
 
+#include <openssl/err.h>
+#include <openssl/ssl.h>
+
 #include <cerrno>
 #include <cstring>
 #include <sstream>
+#include <string>
 
 namespace duc {
+namespace {
+
+std::string collect_ssl_errors() {
+    std::string text;
+    unsigned long code = 0;
+    while ((code = ERR_get_error()) != 0) {
+        if (!text.empty()) {
+            text += "; ";
+        }
+        text += ERR_error_string(code, nullptr);
+    }
+    return text.empty() ? "unknown ssl error" : text;
+}
+
+bool send_all_plain(int fd, const std::string& data, std::string* err) {
+    size_t sent_total = 0;
+    while (sent_total < data.size()) {
+        const ssize_t n = ::send(fd, data.data() + sent_total, data.size() - sent_total, 0);
+        if (n <= 0) {
+            if (err) {
+                *err = std::string("send failed: ") + std::strerror(errno);
+            }
+            return false;
+        }
+        sent_total += static_cast<size_t>(n);
+    }
+    return true;
+}
+
+bool send_all_tls(SSL* ssl, const std::string& data, std::string* err) {
+    size_t sent_total = 0;
+    while (sent_total < data.size()) {
+        const int n = SSL_write(ssl, data.data() + sent_total, static_cast<int>(data.size() - sent_total));
+        if (n <= 0) {
+            const int ssl_err = SSL_get_error(ssl, n);
+            if (ssl_err == SSL_ERROR_WANT_READ || ssl_err == SSL_ERROR_WANT_WRITE) {
+                continue;
+            }
+            if (err) {
+                *err = "ssl write failed: " + collect_ssl_errors();
+            }
+            return false;
+        }
+        sent_total += static_cast<size_t>(n);
+    }
+    return true;
+}
+
+bool recv_all_plain(int fd, std::string* raw, std::string* err) {
+    char buf[4096];
+    while (true) {
+        const ssize_t n = ::recv(fd, buf, sizeof(buf), 0);
+        if (n == 0) {
+            break;
+        }
+        if (n < 0) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                if (err) *err = "recv timeout";
+            } else {
+                if (err) *err = std::string("recv failed: ") + std::strerror(errno);
+            }
+            return false;
+        }
+        raw->append(buf, static_cast<size_t>(n));
+    }
+    return true;
+}
+
+bool recv_all_tls(SSL* ssl, std::string* raw, std::string* err) {
+    char buf[4096];
+    while (true) {
+        const int n = SSL_read(ssl, buf, static_cast<int>(sizeof(buf)));
+        if (n > 0) {
+            raw->append(buf, static_cast<size_t>(n));
+            continue;
+        }
+
+        const int ssl_err = SSL_get_error(ssl, n);
+        if (ssl_err == SSL_ERROR_ZERO_RETURN) {
+            break;
+        }
+        if (ssl_err == SSL_ERROR_WANT_READ || ssl_err == SSL_ERROR_WANT_WRITE) {
+            continue;
+        }
+        if (ssl_err == SSL_ERROR_SYSCALL && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+            if (err) *err = "recv timeout";
+            return false;
+        }
+        if (err) {
+            *err = "ssl read failed: " + collect_ssl_errors();
+        }
+        return false;
+    }
+    return true;
+}
+
+}  // namespace
 
 std::string http_status_text(int status_code) {
     switch (status_code) {
@@ -47,7 +148,11 @@ bool parse_request_line(const std::string& line, std::string* method, std::strin
     return true;
 }
 
-HttpResponse http_get(const std::string& host, int port, const std::string& target, int timeout_ms) {
+HttpResponse http_get(const std::string& host,
+                      int port,
+                      const std::string& target,
+                      int timeout_ms,
+                      const HttpTlsOptions& tls) {
     HttpResponse out;
 
     addrinfo hints{};
@@ -55,8 +160,8 @@ HttpResponse http_get(const std::string& host, int port, const std::string& targ
     hints.ai_socktype = SOCK_STREAM;
 
     addrinfo* res = nullptr;
-    std::string port_str = std::to_string(port);
-    int gai = ::getaddrinfo(host.c_str(), port_str.c_str(), &hints, &res);
+    const std::string port_str = std::to_string(port);
+    const int gai = ::getaddrinfo(host.c_str(), port_str.c_str(), &hints, &res);
     if (gai != 0) {
         out.error = std::string("getaddrinfo failed: ") + ::gai_strerror(gai);
         return out;
@@ -91,43 +196,102 @@ HttpResponse http_get(const std::string& host, int port, const std::string& targ
     req << "GET " << target << " HTTP/1.1\r\n";
     req << "Host: " << host << "\r\n";
     req << "Connection: close\r\n\r\n";
-
     const std::string req_data = req.str();
-    ssize_t sent = ::send(fd, req_data.data(), req_data.size(), 0);
-    if (sent < 0) {
-        out.error = std::string("send failed: ") + std::strerror(errno);
-        ::close(fd);
-        return out;
-    }
 
     std::string raw;
-    char buf[4096];
-    while (true) {
-        ssize_t n = ::recv(fd, buf, sizeof(buf), 0);
-        if (n == 0) {
-            break;
-        }
-        if (n < 0) {
-            if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                out.error = "recv timeout";
-            } else {
-                out.error = std::string("recv failed: ") + std::strerror(errno);
-            }
+    SSL_CTX* ssl_ctx = nullptr;
+    SSL* ssl = nullptr;
+
+    if (tls.enable_tls) {
+        ssl_ctx = SSL_CTX_new(TLS_client_method());
+        if (!ssl_ctx) {
+            out.error = "ssl ctx init failed: " + collect_ssl_errors();
             ::close(fd);
             return out;
         }
-        raw.append(buf, static_cast<size_t>(n));
+        SSL_CTX_set_verify(ssl_ctx, SSL_VERIFY_PEER, nullptr);
+
+        int ca_ok = 0;
+        if (!tls.ca_cert_path.empty()) {
+            ca_ok = SSL_CTX_load_verify_locations(ssl_ctx, tls.ca_cert_path.c_str(), nullptr);
+        } else {
+            ca_ok = SSL_CTX_set_default_verify_paths(ssl_ctx);
+        }
+        if (ca_ok != 1) {
+            out.error = "load ca failed: " + collect_ssl_errors();
+            SSL_CTX_free(ssl_ctx);
+            ::close(fd);
+            return out;
+        }
+
+        ssl = SSL_new(ssl_ctx);
+        if (!ssl) {
+            out.error = "ssl object init failed: " + collect_ssl_errors();
+            SSL_CTX_free(ssl_ctx);
+            ::close(fd);
+            return out;
+        }
+
+        SSL_set_fd(ssl, fd);
+        if (!host.empty()) {
+            (void)SSL_set_tlsext_host_name(ssl, host.c_str());
+        }
+
+        if (SSL_connect(ssl) != 1) {
+            out.error = "tls handshake failed: " + collect_ssl_errors();
+            SSL_free(ssl);
+            SSL_CTX_free(ssl_ctx);
+            ::close(fd);
+            return out;
+        }
+
+        const long verify_rc = SSL_get_verify_result(ssl);
+        if (verify_rc != X509_V_OK) {
+            out.error = std::string("certificate verify failed: ") + X509_verify_cert_error_string(verify_rc);
+            SSL_shutdown(ssl);
+            SSL_free(ssl);
+            SSL_CTX_free(ssl_ctx);
+            ::close(fd);
+            return out;
+        }
+
+        if (!send_all_tls(ssl, req_data, &out.error)) {
+            SSL_shutdown(ssl);
+            SSL_free(ssl);
+            SSL_CTX_free(ssl_ctx);
+            ::close(fd);
+            return out;
+        }
+        if (!recv_all_tls(ssl, &raw, &out.error)) {
+            SSL_shutdown(ssl);
+            SSL_free(ssl);
+            SSL_CTX_free(ssl_ctx);
+            ::close(fd);
+            return out;
+        }
+        SSL_shutdown(ssl);
+        SSL_free(ssl);
+        SSL_CTX_free(ssl_ctx);
+        ::close(fd);
+    } else {
+        if (!send_all_plain(fd, req_data, &out.error)) {
+            ::close(fd);
+            return out;
+        }
+        if (!recv_all_plain(fd, &raw, &out.error)) {
+            ::close(fd);
+            return out;
+        }
+        ::close(fd);
     }
 
-    ::close(fd);
-
-    size_t line_end = raw.find("\r\n");
+    const size_t line_end = raw.find("\r\n");
     if (line_end == std::string::npos) {
         out.error = "invalid http response line";
         return out;
     }
 
-    std::string status_line = raw.substr(0, line_end);
+    const std::string status_line = raw.substr(0, line_end);
     std::istringstream iss(status_line);
     std::string version;
     iss >> version >> out.status_code;
@@ -136,7 +300,7 @@ HttpResponse http_get(const std::string& host, int port, const std::string& targ
         return out;
     }
 
-    size_t body_start = raw.find("\r\n\r\n");
+    const size_t body_start = raw.find("\r\n\r\n");
     if (body_start == std::string::npos) {
         out.body.clear();
     } else {
